@@ -1,0 +1,40 @@
+{
+  "models": {
+    "base_model": {
+      "name": "原始模型",
+      "base_model_path": "/raid5/sh/model/unsloth/gemma-4-E4B-it-unsloth-bnb-4bit",
+      "max_seq_length": 2048,
+      "load_in_4bit": true,
+      "device_map": "cuda:0"
+    },
+    "finetuned_model": {
+      "name": "微调模型",
+      "base_model_path": "/raid5/sh/model/unsloth/gemma-4-E4B-it-unsloth-bnb-4bit",
+      "lora_adapter_path": "/raid5/sh/model/finetuned/gemma4_e4b_lora",
+      "max_seq_length": 2048,
+      "load_in_4bit": true,
+      "device_map": "cuda:0"
+    }
+  },
+  "test_data": {
+    "images": [
+      {
+        "source": "https://fsimage.guihuao.com/images/28b37a22-2e2e-4adc-8e94-eedc986d26a9/5147493742738931713.jpeg?imageMogr2/crop/!1353x1353a1311a823",
+        "query": "检测图中的水面绿藻",
+        "ground_truth": [
+          {
+            "bbox": [0, 603, 1353, 749],
+            "label": "green algae",
+            "confidence": 1.0
+          }
+        ]
+      }
+    ],
+    "confidence_thresholds": [0.5, 0.7, 0.85, 0.95]
+  },
+  "output_settings": {
+    "save_detailed_results": true,
+    "generate_comparison_images": true,
+    "output_format": "json"
+  }
+}
