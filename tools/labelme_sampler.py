@@ -3,7 +3,6 @@ LabelMe标注数据样本均衡化选择工具
 支持两种选择模式: n张图片模式和n个标签样本模式
 """
 
-import json
 import logging
 import random
 from pathlib import Path
@@ -16,7 +15,7 @@ from enum import Enum
 import threading
 
 from .progress_logger import TQDM_AVAILABLE, setup_progress_logging, create_progress_bar
-from .file_utils import find_json_files, parse_json_file, find_image_file
+from .file_utils import find_json_files, parse_json_file, find_image_file, write_json_file
 
 try:
     from PIL import Image
@@ -257,12 +256,12 @@ class LabelMeSampler:
                         self.logger.warning(f"[处理] 错误: {json_path.name} - {e}")
         else:
             for i, json_path in enumerate(json_files, 1):
+                self._process_single_file(json_path, global_dict, global_lock)
+
                 if self._pbar:
                     self._pbar.update(1)
                 elif self.progress_callback:
                     self.progress_callback(json_path.name, i, len(json_files))
-
-                self._process_single_file(json_path, global_dict, global_lock)
 
         if self._pbar:
             self._pbar.close()
@@ -495,9 +494,7 @@ def main():
 
     if args.output:
         output_path = Path(args.output)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(result.to_dict(), f, indent=2, ensure_ascii=False)
+        write_json_file(output_path, result.to_dict(), indent=2)
         print(f"\n选择结果已保存到: {args.output}")
 
     if result.duration:

@@ -18,6 +18,10 @@ from .file_utils import (
     parse_json_file,
     find_image_file,
     get_relative_path,
+    json_loads,
+    json_dumps_str,
+    write_json_file,
+    ORJSON_AVAILABLE,
 )
 
 from .labelme_cleaner import (
@@ -53,6 +57,10 @@ __all__ = [
     "parse_json_file",
     "find_image_file",
     "get_relative_path",
+    "json_loads",
+    "json_dumps_str",
+    "write_json_file",
+    "ORJSON_AVAILABLE",
     "ValidationStatus",
     "ValidationResult",
     "CleaningResult",

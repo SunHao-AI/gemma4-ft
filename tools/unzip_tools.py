@@ -411,11 +411,6 @@ class UnzipTool:
                         self.logger.warning(f"[解压] 失败: {Path(extract_result['file']).name}")
         else:
             for i, archive_path in enumerate(archive_files, 1):
-                if self._pbar:
-                    self._pbar.update(1)
-                elif self.progress_callback:
-                    self.progress_callback(archive_path.name, i, total)
-
                 extract_result = self._extract_single_file(archive_path, i, total)
 
                 if extract_result["success"]:
@@ -424,6 +419,11 @@ class UnzipTool:
                 else:
                     result.failed_count += 1
                     result.failed_files.append({"file": extract_result["file"], "reason": extract_result["error"]})
+
+                if self._pbar:
+                    self._pbar.update(1)
+                elif self.progress_callback:
+                    self.progress_callback(archive_path.name, i, total)
 
         if self._pbar:
             self._pbar.close()

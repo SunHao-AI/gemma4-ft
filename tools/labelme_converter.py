@@ -3,7 +3,6 @@ LabelMe标注数据转换为Unsloth框架兼容格式
 支持生成训练集、验证集和测试集
 """
 
-import json
 import logging
 import random
 from pathlib import Path
@@ -15,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
 from .progress_logger import TQDM_AVAILABLE, setup_progress_logging, create_progress_bar
-from .file_utils import find_json_files, parse_json_file, find_image_file
+from .file_utils import find_json_files, parse_json_file, find_image_file, json_dumps_str, write_json_file
 
 try:
     from PIL import Image
@@ -159,6 +158,9 @@ class LabelMeConverter:
         max_workers: int = 4,
         progress_callback: Optional[Callable[[str, int, int], None]] = None,
         use_tqdm: bool = True,
+        per_category_mode: bool = False,
+        category_instruction_template: str = "请分析这张图像，识别并定位其中的 {category}。",
+        selected_files: Optional[List[str]] = None,
     ):
         """
         初始化转换工具
@@ -166,7 +168,7 @@ class LabelMeConverter:
         Args:
             source_dir: 源目录路径
             output_dir: 输出目录路径
-            instruction_text: 用户指令文本
+            instruction_text: 用户指令文本（用于非per_category模式）
             normalize_coordinates: 是否归一化坐标
             train_ratio: 训练集比例
             val_ratio: 验证集比例
@@ -178,9 +180,14 @@ class LabelMeConverter:
             max_workers: 最大线程数
             progress_callback: 进度回调函数
             use_tqdm: 是否使用tqdm进度条，默认True
+            per_category_mode: 是否按类别生成训练数据（每张图片每个类别生成一条记录）
+            category_instruction_template: 类别指令模板，使用{category}占位符
+            selected_files: 仅转换指定的JSON文件路径列表（如来自均衡选择结果），
+                为None时则扫描source_dir下所有JSON文件
         """
         self.source_dir = Path(source_dir)
         self.output_dir = Path(output_dir)
+        self.selected_files = selected_files
         self.instruction_text = instruction_text
         self.normalize_coordinates = normalize_coordinates
         self.train_ratio = train_ratio
@@ -192,6 +199,8 @@ class LabelMeConverter:
         self.progress_callback = progress_callback
         self.use_tqdm = use_tqdm and TQDM_AVAILABLE
         self._pbar = None
+        self.per_category_mode = per_category_mode
+        self.category_instruction_template = category_instruction_template
 
         self.logger = setup_progress_logging("LabelMeConverter", log_file, log_level, self.use_tqdm)
 
@@ -283,8 +292,8 @@ class LabelMeConverter:
             return f"[{int(bbox.x_min)}, {int(bbox.y_min)}, {int(bbox.x_max)}, {int(bbox.y_max)}]"
 
     def _generate_conversation_messages(self, bboxes: List[BoundingBox]) -> List[Dict]:
-        """生成对话格式消息"""
-        user_content = [{"type": "text", "text": self.instruction_text}]
+        """生成对话格式消息（返回所有类别）"""
+        user_content = [{"type": "image"}, {"type": "text", "text": self.instruction_text}]
 
         bbox_descriptions = []
         label_counts = Counter(bbox.label for bbox in bboxes)
@@ -299,6 +308,30 @@ class LabelMeConverter:
             bbox_descriptions.append(f"\n- {bbox.label}: {coord_str}")
 
         response_text = "".join(bbox_descriptions)
+
+        assistant_content = [{"type": "text", "text": response_text}]
+
+        return [{"role": "user", "content": user_content}, {"role": "assistant", "content": assistant_content}]
+
+    def _generate_category_specific_messages(self, bboxes: List[BoundingBox], target_category: str) -> List[Dict]:
+        """生成指定类别的对话格式消息"""
+        instruction_text = self.category_instruction_template.format(category=target_category)
+        user_content = [{"type": "image"}, {"type": "text", "text": instruction_text}]
+
+        category_bboxes = [bbox for bbox in bboxes if bbox.label == target_category]
+
+        if not category_bboxes:
+            response_text = f"\n{target_category}: 0个\n\n图像中未检测到 {target_category}。"
+        else:
+            bbox_descriptions = []
+            bbox_descriptions.append(f"\n{target_category}: {len(category_bboxes)}个\n")
+            bbox_descriptions.append("\n\n详细边界框坐标（格式：[x_min, y_min, x_max, y_max]）：\n")
+
+            for bbox in category_bboxes:
+                coord_str = self._format_bbox_string(bbox, normalized=self.normalize_coordinates)
+                bbox_descriptions.append(f"\n- {target_category}: {coord_str}")
+
+            response_text = "".join(bbox_descriptions)
 
         assistant_content = [{"type": "text", "text": response_text}]
 
@@ -359,23 +392,46 @@ class LabelMeConverter:
                 counter["skipped"] += 1
             return None
 
-        conversation_messages = self._generate_conversation_messages(bounding_boxes)
-
-        record = ConversionRecord(
-            messages=conversation_messages,
-            images=[str(image_file) if image_file else image_path_str],
-            metadata={"json_path": str(json_path), "image_width": image_width, "image_height": image_height, "num_objects": len(bounding_boxes), "labels": [bbox.label for bbox in bounding_boxes]},
-            json_path=str(json_path),
-            image_path=str(image_file) if image_file else image_path_str,
-        )
+        records_to_add = []
+        if self.per_category_mode:
+            unique_categories = set(bbox.label for bbox in bounding_boxes)
+            for category in unique_categories:
+                category_bboxes = [bbox for bbox in bounding_boxes if bbox.label == category]
+                conversation_messages = self._generate_category_specific_messages(bounding_boxes, category)
+                record = ConversionRecord(
+                    messages=conversation_messages,
+                    images=[str(image_file) if image_file else image_path_str],
+                    metadata={
+                        "json_path": str(json_path),
+                        "image_width": image_width,
+                        "image_height": image_height,
+                        "num_objects": len(category_bboxes),
+                        "labels": [category],
+                        "target_category": category,
+                        "total_categories_in_image": len(unique_categories),
+                    },
+                    json_path=str(json_path),
+                    image_path=str(image_file) if image_file else image_path_str,
+                )
+                records_to_add.append(record)
+        else:
+            conversation_messages = self._generate_conversation_messages(bounding_boxes)
+            record = ConversionRecord(
+                messages=conversation_messages,
+                images=[str(image_file) if image_file else image_path_str],
+                metadata={"json_path": str(json_path), "image_width": image_width, "image_height": image_height, "num_objects": len(bounding_boxes), "labels": [bbox.label for bbox in bounding_boxes]},
+                json_path=str(json_path),
+                image_path=str(image_file) if image_file else image_path_str,
+            )
+            records_to_add.append(record)
 
         with lock:
-            global_list.append(record)
+            global_list.extend(records_to_add)
 
         with counter_lock:
-            counter["converted"] += 1
+            counter["converted"] += len(records_to_add)
 
-        return record
+        return records_to_add[0] if records_to_add else None
 
     def _split_dataset(self, records: List[ConversionRecord]) -> Tuple[List[ConversionRecord], List[ConversionRecord], List[ConversionRecord]]:
         """划分数据集"""
@@ -413,7 +469,7 @@ class LabelMeConverter:
 
         with open(output_file, "w", encoding="utf-8") as f:
             for i, record in enumerate(records, 1):
-                f.write(json.dumps(record.to_dict(), ensure_ascii=False) + "\n")
+                f.write(json_dumps_str(record.to_dict()) + "\n")
                 if write_pbar:
                     write_pbar.update(1)
 
@@ -537,7 +593,11 @@ class LabelMeConverter:
         )
         result.start_time = datetime.now()
 
-        json_files = find_json_files(self.source_dir, logger=self.logger)
+        if self.selected_files:
+            json_files = [Path(f) for f in self.selected_files]
+            self.logger.info(f"使用筛选文件列表: {len(json_files)} 个文件")
+        else:
+            json_files = find_json_files(self.source_dir, logger=self.logger)
         result.total_json_files = len(json_files)
 
         if not json_files:
@@ -584,17 +644,17 @@ class LabelMeConverter:
                             counter["failed"] += 1
         else:
             for i, json_path in enumerate(json_files, 1):
-                if self._pbar:
-                    self._pbar.update(1)
-                elif self.progress_callback:
-                    self.progress_callback(json_path.name, i, len(json_files))
-
                 try:
                     self._convert_single_file(json_path, global_list, global_lock, counter, counter_lock)
                 except Exception as e:
                     self.logger.warning(f"[转换] 错误: {json_path.name} - {e}")
                     with counter_lock:
                         counter["failed"] += 1
+
+                if self._pbar:
+                    self._pbar.update(1)
+                elif self.progress_callback:
+                    self.progress_callback(json_path.name, i, len(json_files))
 
         if self._pbar:
             self._pbar.close()
@@ -647,6 +707,9 @@ def convert_to_unsloth_format(
     max_workers: int = 4,
     progress_callback: Optional[Callable[[str, int, int], None]] = None,
     use_tqdm: bool = True,
+    per_category_mode: bool = False,
+    category_instruction_template: str = "请分析这张图像，识别并定位其中的 {category}。",
+    selected_files: Optional[List[str]] = None,
 ) -> ConversionResult:
     """
     将LabelMe数据转换为Unsloth框架兼容格式
@@ -654,7 +717,7 @@ def convert_to_unsloth_format(
     Args:
         source_dir: 源目录路径
         output_dir: 输出目录路径
-        instruction_text: 用户指令文本
+        instruction_text: 用户指令文本（用于非per_category模式）
         normalize_coordinates: 是否归一化坐标
         train_ratio: 训练集比例
         val_ratio: 验证集比例
@@ -665,18 +728,27 @@ def convert_to_unsloth_format(
         max_workers: 最大线程数
         progress_callback: 进度回调函数
         use_tqdm: 是否使用tqdm进度条，默认True
+        per_category_mode: 是否按类别生成训练数据（每张图片每个类别生成一条记录）
+        category_instruction_template: 类别指令模板，使用{category}占位符
+        selected_files: 仅转换指定的JSON文件路径列表（如来自均衡选择结果），
+            为None时则扫描source_dir下所有JSON文件
 
     Returns:
         ConversionResult: 转换结果对象
 
     Example:
+        >>> # 传统模式：一张图片一条记录，返回所有类别
         >>> result = convert_to_unsloth_format(
         ...     source_dir="path/to/labelme_data",
         ...     output_dir="path/to/output"
         ... )
+        >>> # 按类别模式：一张图片按类别生成多条记录
+        >>> result = convert_to_unsloth_format(
+        ...     source_dir="path/to/labelme_data",
+        ...     output_dir="path/to/output",
+        ...     per_category_mode=True
+        ... )
         >>> print(f"训练集: {result.train_split.total_records} 条")
-        >>> print(f"验证集: {result.val_split.total_records} 条")
-        >>> print(f"测试集: {result.test_split.total_records} 条")
     """
     converter = LabelMeConverter(
         source_dir=source_dir,
@@ -692,6 +764,9 @@ def convert_to_unsloth_format(
         max_workers=max_workers,
         progress_callback=progress_callback,
         use_tqdm=use_tqdm,
+        per_category_mode=per_category_mode,
+        category_instruction_template=category_instruction_template,
+        selected_files=selected_files,
     )
 
     return converter.convert()
@@ -770,9 +845,7 @@ def main():
 
     if args.report:
         report_path = Path(args.report)
-        report_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(report_path, "w", encoding="utf-8") as f:
-            json.dump(result.to_dict(), f, indent=2, ensure_ascii=False)
+        write_json_file(report_path, result.to_dict(), indent=2)
         print(f"\n转换报告已保存到: {args.report}")
 
     if result.duration:

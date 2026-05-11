@@ -8,49 +8,13 @@ WCAG 2.1 颜色改进方案 - 优化版
 import sys
 from typing import Tuple
 
-
-def hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
-    """将十六进制颜色转换为 RGB 值"""
-    hex_color = hex_color.strip().lstrip('#')
-    if len(hex_color) == 3:
-        hex_color = ''.join([c * 2 for c in hex_color])
-    return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
-
-
-def rgb_to_hex(r: int, g: int, b: int) -> str:
-    """将 RGB 值转换为十六进制颜色"""
-    return '#{:02x}{:02x}{:02x}'.format(r, g, b)
-
-
-def srgb_to_linear(channel: int) -> float:
-    """将 sRGB 颜色通道转换为线性亮度值"""
-    c = channel / 255.0
-    if c <= 0.03928:
-        return c / 12.92
-    else:
-        return ((c + 0.055) / 1.055) ** 2.4
-
-
-def get_relative_luminance(r: int, g: int, b: int) -> float:
-    """计算相对亮度值(0-1)"""
-    r_linear = srgb_to_linear(r)
-    g_linear = srgb_to_linear(g)
-    b_linear = srgb_to_linear(b)
-    return 0.2126 * r_linear + 0.7152 * g_linear + 0.0722 * b_linear
-
-
-def calculate_contrast_ratio(color1: str, color2: str) -> float:
-    """计算两个颜色之间的对比度比率"""
-    rgb1 = hex_to_rgb(color1)
-    rgb2 = hex_to_rgb(color2)
-    
-    l1 = get_relative_luminance(*rgb1)
-    l2 = get_relative_luminance(*rgb2)
-    
-    lighter = max(l1, l2)
-    darker = min(l1, l2)
-    
-    return (lighter + 0.05) / (darker + 0.05)
+from color_utils import (
+    hex_to_rgb,
+    rgb_to_hex,
+    srgb_to_linear,
+    get_relative_luminance,
+    calculate_contrast_ratio,
+)
 
 
 def darken_color(hex_color: str, factor: float) -> str:

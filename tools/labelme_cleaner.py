@@ -3,7 +3,6 @@ LabelMe标注数据清洗与筛选工具
 验证JSON标注文件的完整性，筛选合规文件并生成清洗报告
 """
 
-import json
 import logging
 import shutil
 import threading
@@ -15,7 +14,18 @@ from enum import Enum
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .progress_logger import TQDM_AVAILABLE, setup_progress_logging, create_progress_bar, PhaseProgressManager
-from .file_utils import find_json_files, parse_json_file, find_image_file, get_relative_path
+from .file_utils import (
+    find_json_files,
+    parse_json_file,
+    find_image_file,
+    get_relative_path,
+    json_loads,
+    json_dumps_str,
+    write_json_file,
+    ORJSON_AVAILABLE,
+    create_file_link,
+    SUPPORTED_IMAGE_EXTENSIONS,
+)
 
 
 class ValidationStatus(Enum):
@@ -128,6 +138,12 @@ class LabelMeCleaner:
         enable_integrity_check: bool = True,
         enable_statistics_report: bool = True,
         format_output_dir: Optional[str] = None,
+        format_subdir_name: str = "adv_label",
+        cleaned_subdir_name: str = "cleaned_data",
+        pretty_format_json: bool = False,
+        label_mapping: Optional[Dict[str, str]] = None,
+        download_remote_images: bool = False,
+        remote_image_download_dir: Optional[str] = None,
     ):
         self.source_dir = Path(source_dir)
         self.target_dir = Path(target_dir)
@@ -142,7 +158,20 @@ class LabelMeCleaner:
         self.enable_format_conversion = enable_format_conversion
         self.enable_integrity_check = enable_integrity_check
         self.enable_statistics_report = enable_statistics_report
-        self.format_output_dir = Path(format_output_dir) if format_output_dir else None
+        self.format_subdir_name = format_subdir_name
+        self.cleaned_subdir_name = cleaned_subdir_name
+
+        if format_output_dir:
+            self.format_output_dir = Path(format_output_dir)
+        else:
+            self.format_output_dir = self.target_dir / self.format_subdir_name
+
+        self.cleaned_data_dir = self.target_dir / self.cleaned_subdir_name
+
+        self.pretty_format_json = pretty_format_json
+        self.label_mapping = label_mapping or {}
+        self.download_remote_images = download_remote_images
+        self.remote_image_download_dir = Path(remote_image_download_dir) if remote_image_download_dir else self.target_dir / "downloaded_images"
         self._pbar = None
         self._phase_manager = None
 
@@ -160,24 +189,10 @@ class LabelMeCleaner:
         """
         result = ValidationResult(json_path=str(json_path), status=ValidationStatus.VALID)
 
-        try:
-            with open(json_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except json.JSONDecodeError as e:
+        data = parse_json_file(json_path, self.logger)
+        if data is None:
             result.status = ValidationStatus.INVALID_JSON
-            result.error_message = f"JSON解析错误: {e}"
-            return result
-        except UnicodeDecodeError as e:
-            try:
-                with open(json_path, "r", encoding="gbk") as f:
-                    data = json.load(f)
-            except Exception as e2:
-                result.status = ValidationStatus.INVALID_JSON
-                result.error_message = f"编码错误: {e2}"
-                return result
-        except Exception as e:
-            result.status = ValidationStatus.INVALID_JSON
-            result.error_message = f"文件读取错误: {e}"
+            result.error_message = "JSON文件解析失败"
             return result
 
         if "shapes" not in data:
@@ -237,6 +252,11 @@ class LabelMeCleaner:
         """
         复制合规文件到目标目录
 
+        图片文件始终复制到JSON文件所在的类别文件夹中,
+        确保类别文件夹结构统一性
+
+        所有清洗后的标注数据统一存放在 cleaned_data_dir 子目录中
+
         Args:
             json_path: JSON文件路径
             image_path: 图片文件路径
@@ -246,9 +266,9 @@ class LabelMeCleaner:
         """
         if self.preserve_structure:
             relative_json = get_relative_path(json_path, self.source_dir)
-            target_json = self.target_dir / relative_json
+            target_json = self.cleaned_data_dir / relative_json
         else:
-            target_json = self.target_dir / json_path.name
+            target_json = self.cleaned_data_dir / json_path.name
 
         target_json.parent.mkdir(parents=True, exist_ok=True)
 
@@ -261,11 +281,7 @@ class LabelMeCleaner:
 
         copied_image = None
         if self.copy_images and image_path:
-            if self.preserve_structure:
-                relative_image = get_relative_path(image_path, self.source_dir)
-                target_image = self.target_dir / relative_image
-            else:
-                target_image = target_json.parent / image_path.name
+            target_image = target_json.parent / image_path.name
 
             target_image.parent.mkdir(parents=True, exist_ok=True)
 
@@ -364,6 +380,127 @@ class LabelMeCleaner:
 
         return str(report_file)
 
+    def _download_remote_image(self, image_url: str, target_dir: Path, json_path: Path) -> Optional[Path]:
+        """
+        下载远程图片到本地目录
+
+        Args:
+            image_url: 图片URL地址
+            target_dir: 目标保存目录
+            json_path: JSON文件路径（用于生成文件名）
+
+        Returns:
+            Optional[Path]: 下载后的本地路径，失败返回None
+        """
+        import hashlib
+        import urllib.request
+        import urllib.error
+
+        try:
+            url_hash = hashlib.md5(image_url.encode()).hexdigest()[:8]
+            url_ext = Path(image_url).suffix or ".jpg"
+            safe_ext = url_ext.split("?")[0][:5] if "?" in url_ext else url_ext[:5]
+
+            target_filename = f"{json_path.stem}_{url_hash}{safe_ext}"
+            target_path = target_dir / target_filename
+
+            if target_path.exists():
+                self.logger.info(f"图片已存在: {target_path}")
+                return target_path
+
+            target_dir.mkdir(parents=True, exist_ok=True)
+
+            self.logger.info(f"下载图片: {image_url[:50]}...")
+
+            request = urllib.request.Request(image_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
+
+            with urllib.request.urlopen(request, timeout=30) as response:
+                image_data = response.read()
+                if len(image_data) < 100:
+                    raise ValueError("下载的图片数据太小，可能损坏")
+
+                with open(target_path, "wb") as f:
+                    f.write(image_data)
+
+                self.logger.info(f"下载成功: {target_path}")
+                return target_path
+
+        except urllib.error.URLError as e:
+            self.logger.warning(f"网络错误，无法下载图片: {image_url[:30]} - {e}")
+            return None
+        except urllib.error.HTTPError as e:
+            self.logger.warning(f"HTTP错误，无法下载图片: {image_url[:30]} - {e}")
+            return None
+        except Exception as e:
+            self.logger.warning(f"下载图片失败: {image_url[:30]} - {e}")
+            return None
+
+    def _extract_image_path(self, data: Dict, json_path: Path) -> Optional[str]:
+        """
+        从JSON数据中提取图片路径（支持imageUrl和imagePath两种格式）
+
+        Args:
+            data: JSON解析后的数据
+            json_path: JSON文件路径
+
+        Returns:
+            Optional[str]: 图片路径（本地路径或URL），None表示无法获取
+        """
+        image_url = data.get("imageUrl", "")
+        image_path_str = data.get("imagePath", "")
+
+        if image_url and isinstance(image_url, str):
+            if self.download_remote_images:
+                downloaded_path = self._download_remote_image(image_url, self.remote_image_download_dir, json_path)
+                if downloaded_path:
+                    return str(downloaded_path)
+            data["_image_url"] = image_url
+            data["_image_source"] = "remote"
+            return image_url
+
+        if image_path_str and isinstance(image_path_str, str):
+            data["_image_source"] = "local"
+            return image_path_str
+
+        return None
+
+    def _apply_label_mapping(self, shapes: List[Dict]) -> List[Dict]:
+        """
+        应用类别映射到shapes列表
+
+        Args:
+            shapes: 标注shapes列表
+
+        Returns:
+            List[Dict]: 映射后的shapes列表
+        """
+        if not self.label_mapping:
+            return shapes
+
+        mapped_shapes = []
+        mapping_applied_count = 0
+
+        for shape in shapes:
+            if not isinstance(shape, dict):
+                continue
+
+            original_label = shape.get("label", "")
+            if original_label and original_label in self.label_mapping:
+                mapped_label = self.label_mapping[original_label]
+                shape_copy = shape.copy()
+                shape_copy["label"] = mapped_label
+                shape_copy["_original_label"] = original_label
+                shape_copy["_label_mapped"] = True
+                mapped_shapes.append(shape_copy)
+                mapping_applied_count += 1
+            else:
+                mapped_shapes.append(shape)
+
+        if mapping_applied_count > 0:
+            self.logger.debug(f"应用类别映射: {mapping_applied_count} 个标注")
+
+        return mapped_shapes
+
     def _is_name_matched(self, json_path: Path, image_path: Path) -> bool:
         """
         判断JSON文件名是否与图片文件名匹配
@@ -413,10 +550,16 @@ class LabelMeCleaner:
 
     def _convert_format(self, valid_files: List[str], result: CleaningResult) -> Dict[str, Any]:
         """
-        数据格式转换阶段
+        数据格式转换阶段（多线程并行）
 
         将清洗后的 LabelMe JSON 文件转换为标准化格式，
-        添加额外元数据字段并规范化标注数据结构
+        添加额外元数据字段并规范化标注数据结构，
+        支持类别映射和imageUrl处理
+
+        文件保存策略：
+        - 当 preserve_structure=True 时，保留源文件的相对路径结构
+        - 处理 a/b/c.json 文件时，转换后保存至 format_output_dir/a/b/c.json
+        - 对应的图片文件以符号链接形式保存至 format_output_dir/a/b/c.jpg
 
         Args:
             valid_files: 有效文件列表
@@ -431,6 +574,13 @@ class LabelMeCleaner:
             "failed_files": 0,
             "failed_details": [],
             "output_dir": str(self.format_output_dir) if self.format_output_dir else str(self.target_dir),
+            "label_mapping_applied": len(self.label_mapping) > 0,
+            "label_mapping_count": 0,
+            "image_url_detected": 0,
+            "remote_images_downloaded": 0,
+            "image_links_created": 0,
+            "image_links_failed": 0,
+            "preserve_structure": self.preserve_structure,
         }
 
         if not valid_files:
@@ -440,51 +590,169 @@ class LabelMeCleaner:
         output_dir = self.format_output_dir or self.target_dir
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        for json_file in valid_files:
-            json_path = Path(json_file)
-            try:
-                with open(json_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
+        batch_cleaned_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        json_indent = 2 if self.pretty_format_json else None
 
-                data["_cleaned_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        converted_files = 0
+        failed_files = 0
+        failed_details: List[Dict] = []
+        label_mapping_count = 0
+        image_url_detected = 0
+        remote_images_downloaded = 0
+        image_links_created = 0
+        image_links_failed = 0
+        converted_lock = threading.Lock()
+        failed_lock = threading.Lock()
+        details_lock = threading.Lock()
+        mapping_lock = threading.Lock()
+        url_lock = threading.Lock()
+        download_lock = threading.Lock()
+        image_link_lock = threading.Lock()
+
+        def _convert_single_file(json_file: str):
+            nonlocal converted_files, failed_files, failed_details, label_mapping_count, image_url_detected, remote_images_downloaded, image_links_created, image_links_failed
+            json_path = Path(json_file)
+            file_converted = 0
+            file_failed = 0
+            file_error = None
+            file_mapping = 0
+            file_url = 0
+            file_download = 0
+            file_link_created = 0
+            file_link_failed = 0
+
+            try:
+                data = parse_json_file(json_path)
+                if data is None:
+                    file_failed = 1
+                    file_error = "JSON解析失败"
+                    self.logger.warning(f"格式转换失败: {json_path.name} - JSON解析失败")
+                    return
+
+                data["_cleaned_at"] = batch_cleaned_at
                 data["_source_path"] = str(json_path)
                 if "_cleaning_status" not in data:
                     data["_cleaning_status"] = "validated"
 
                 shapes = data.get("shapes", [])
-                for shape in shapes:
+
+                if self.label_mapping:
+                    mapped_shapes = self._apply_label_mapping(shapes)
+                    file_mapping = sum(1 for s in mapped_shapes if s.get("_label_mapped"))
+                    data["shapes"] = mapped_shapes
+                    data["_label_mapping_applied"] = True
+                    data["_label_mapping_count"] = file_mapping
+
+                for shape in data.get("shapes", []):
                     if "label" in shape and "_label_normalized" not in shape:
                         shape["_label_normalized"] = shape["label"].lower().strip()
                     if "shape_type" not in shape:
                         shape_type = shape.get("type", "rectangle")
                         shape["shape_type"] = shape_type
 
-                target_path = output_dir / json_path.name
-                with open(target_path, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=2, ensure_ascii=False)
+                image_path_str = self._extract_image_path(data, json_path)
+                source_image_path = None
+                if image_path_str:
+                    if data.get("_image_source") == "remote":
+                        file_url = 1
+                        if self.download_remote_images and Path(image_path_str).exists():
+                            file_download = 1
+                            data["_downloaded_image_path"] = image_path_str
+                            source_image_path = Path(image_path_str)
+                    else:
+                        source_image_path = find_image_file(json_path, image_path_str)
 
-                conversion_result["converted_files"] += 1
+                if self.preserve_structure:
+                    relative_json = get_relative_path(json_path, self.source_dir)
+                    target_json = output_dir / relative_json
+                else:
+                    target_json = output_dir / json_path.name
+
+                write_json_file(target_json, data, indent=json_indent)
+                file_converted = 1
+
+                if self.copy_images and source_image_path and source_image_path.exists():
+                    if self.preserve_structure:
+                        relative_image = get_relative_path(source_image_path, self.source_dir)
+                        target_image = output_dir / relative_image
+                    else:
+                        target_image = target_json.parent / source_image_path.name
+
+                    success, method = create_file_link(
+                        source_image_path,
+                        target_image,
+                        link_type="auto",
+                        logger=self.logger,
+                    )
+                    if success:
+                        file_link_created = 1
+                        data["_image_link_path"] = str(target_image)
+                        data["_image_link_method"] = method
+                    else:
+                        file_link_failed = 1
+                        self.logger.warning(f"图片链接创建失败: {source_image_path} -> {target_image}")
 
             except Exception as e:
-                conversion_result["failed_files"] += 1
-                conversion_result["failed_details"].append(
-                    {
-                        "file": str(json_path),
-                        "error": str(e),
-                    }
-                )
+                file_failed = 1
+                file_error = str(e)
                 self.logger.warning(f"格式转换失败: {json_path.name} - {e}")
 
-        if self._phase_manager:
-            self._phase_manager.update(len(valid_files))
+            with converted_lock:
+                converted_files += file_converted
+            with failed_lock:
+                failed_files += file_failed
+            with mapping_lock:
+                label_mapping_count += file_mapping
+            with url_lock:
+                image_url_detected += file_url
+            with download_lock:
+                remote_images_downloaded += file_download
+            with image_link_lock:
+                image_links_created += file_link_created
+                image_links_failed += file_link_failed
+            if file_error:
+                with details_lock:
+                    failed_details.append(
+                        {
+                            "file": str(json_path),
+                            "error": file_error,
+                        }
+                    )
 
+            if self._phase_manager:
+                self._phase_manager.update(1)
+
+        if self.max_workers > 1 and len(valid_files) > 1:
+            self.logger.info(f"使用 {self.max_workers} 个线程并行格式转换")
+            if self.label_mapping:
+                self.logger.info(f"应用类别映射: {len(self.label_mapping)} 个映射规则")
+            if self.download_remote_images:
+                self.logger.info(f"启用远程图片下载功能")
+            if self.preserve_structure:
+                self.logger.info(f"保留源文件相对路径结构")
+            if self.copy_images:
+                self.logger.info(f"图片文件将创建符号链接(跨平台兼容)")
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                executor.map(_convert_single_file, valid_files)
+        else:
+            for json_file in valid_files:
+                _convert_single_file(json_file)
+
+        conversion_result["converted_files"] = converted_files
+        conversion_result["failed_files"] = failed_files
+        conversion_result["failed_details"] = failed_details
+        conversion_result["label_mapping_count"] = label_mapping_count
+        conversion_result["image_url_detected"] = image_url_detected
+        conversion_result["remote_images_downloaded"] = remote_images_downloaded
+        conversion_result["image_links_created"] = image_links_created
+        conversion_result["image_links_failed"] = image_links_failed
         conversion_result["success_rate"] = conversion_result["converted_files"] / conversion_result["total_files"] * 100 if conversion_result["total_files"] > 0 else 0
 
         return conversion_result
 
     def _verify_integrity(self, valid_files: List[str], result: CleaningResult) -> Dict[str, Any]:
         """
-        数据完整性验证阶段
+        数据完整性验证阶段（多线程并行）
 
         对清洗后的数据进行二次验证，确保：
         1. JSON 文件结构完整性
@@ -510,101 +778,116 @@ class LabelMeCleaner:
             integrity_result["message"] = "无有效文件需要验证"
             return integrity_result
 
-        for json_file in valid_files:
+        passed_files = 0
+        failed_files = 0
+        warnings = 0
+        issues: List[Dict] = []
+        passed_lock = threading.Lock()
+        failed_lock = threading.Lock()
+        warning_lock = threading.Lock()
+        issues_lock = threading.Lock()
+
+        def _verify_single_file(json_file: str):
+            nonlocal passed_files, failed_files, warnings, issues
             json_path = Path(json_file)
             file_issues = []
             passed = True
             has_warning = False
+            file_passed = 0
+            file_failed = 0
+            file_warning = 0
 
-            try:
-                with open(json_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
+            data = parse_json_file(json_path)
+            if data is None:
+                file_failed = 1
+                with issues_lock:
+                    issues.append({"file": str(json_path), "passed": False, "issues": ["JSON解析失败"]})
+                with failed_lock:
+                    failed_files += 1
+                if self._phase_manager:
+                    self._phase_manager.update(1)
+                return
 
-                required_fields = ["shapes", "imagePath"]
-                for field in required_fields:
-                    if field not in data:
-                        file_issues.append(f"缺少必填字段: {field}")
+            required_fields = ["shapes", "imagePath"]
+            for field in required_fields:
+                if field not in data:
+                    file_issues.append(f"缺少必填字段: {field}")
+                    passed = False
+
+            shapes = data.get("shapes", [])
+            if not shapes:
+                file_issues.append("shapes 数组为空")
+                has_warning = True
+
+            for i, shape in enumerate(shapes):
+                if "label" not in shape:
+                    file_issues.append(f"shape[{i}] 缺少 label 字段")
+                    has_warning = True
+                shape_type = shape.get("shape_type", shape.get("type", ""))
+                if shape_type in ["rectangle", "polygon", "line", "point", "circle"]:
+                    points = shape.get("points", [])
+                    if not points:
+                        file_issues.append(f"shape[{i}] 缺少 points 数据")
                         passed = False
 
-                shapes = data.get("shapes", [])
-                if not shapes:
-                    file_issues.append("shapes 数组为空")
+            image_path_str = data.get("imagePath", "")
+            if image_path_str:
+                image_file = find_image_file(json_path, image_path_str, strict_name_match=False)
+                if image_file is None:
+                    file_issues.append(f"图片文件不存在: {image_path_str}")
                     has_warning = True
-
-                for i, shape in enumerate(shapes):
-                    if "label" not in shape:
-                        file_issues.append(f"shape[{i}] 缺少 label 字段")
-                        has_warning = True
-                    shape_type = shape.get("shape_type", shape.get("type", ""))
-                    if shape_type in ["rectangle", "polygon", "line", "point", "circle"]:
-                        points = shape.get("points", [])
-                        if not points:
-                            file_issues.append(f"shape[{i}] 缺少 points 数据")
-                            passed = False
-
-                image_path_str = data.get("imagePath", "")
-                if image_path_str:
-                    image_file = find_image_file(json_path, image_path_str, strict_name_match=False)
-                    if image_file is None:
-                        file_issues.append(f"图片文件不存在: {image_path_str}")
-                        has_warning = True
-                    else:
-                        try:
-                            with open(image_file, "rb") as img_f:
-                                img_data = img_f.read()
-                                if len(img_data) < 100:
-                                    file_issues.append("图片文件可能损坏（文件过小）")
-                                    has_warning = True
-                        except Exception as img_e:
-                            file_issues.append(f"图片文件读取失败: {img_e}")
-                            has_warning = True
-
-                if passed and not has_warning:
-                    integrity_result["passed_files"] += 1
-                elif passed and has_warning:
-                    integrity_result["passed_files"] += 1
-                    integrity_result["warnings"] += 1
                 else:
-                    integrity_result["failed_files"] += 1
+                    try:
+                        with open(image_file, "rb") as img_f:
+                            img_data = img_f.read()
+                            if len(img_data) < 100:
+                                file_issues.append("图片文件可能损坏（文件过小）")
+                                has_warning = True
+                    except Exception as img_e:
+                        file_issues.append(f"图片文件读取失败: {img_e}")
+                        has_warning = True
 
-                if file_issues:
-                    integrity_result["issues"].append(
-                        {
-                            "file": str(json_path),
-                            "passed": passed,
-                            "issues": file_issues,
-                        }
-                    )
+            if passed and not has_warning:
+                file_passed = 1
+            elif passed and has_warning:
+                file_passed = 1
+                file_warning = 1
+            else:
+                file_failed = 1
 
-            except json.JSONDecodeError as e:
-                integrity_result["failed_files"] += 1
-                integrity_result["issues"].append(
-                    {
-                        "file": str(json_path),
-                        "passed": False,
-                        "issues": [f"JSON解析错误: {e}"],
-                    }
-                )
-            except Exception as e:
-                integrity_result["failed_files"] += 1
-                integrity_result["issues"].append(
-                    {
-                        "file": str(json_path),
-                        "passed": False,
-                        "issues": [f"文件处理错误: {e}"],
-                    }
-                )
+            if file_issues:
+                with issues_lock:
+                    issues.append({"file": str(json_path), "passed": passed, "issues": file_issues})
+
+            with passed_lock:
+                passed_files += file_passed
+            with failed_lock:
+                failed_files += file_failed
+            with warning_lock:
+                warnings += file_warning
 
             if self._phase_manager:
                 self._phase_manager.update(1)
 
+        if self.max_workers > 1 and len(valid_files) > 1:
+            self.logger.info(f"使用 {self.max_workers} 个线程并行验证完整性")
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                executor.map(_verify_single_file, valid_files)
+        else:
+            for json_file in valid_files:
+                _verify_single_file(json_file)
+
+        integrity_result["passed_files"] = passed_files
+        integrity_result["failed_files"] = failed_files
+        integrity_result["warnings"] = warnings
+        integrity_result["issues"] = issues
         integrity_result["pass_rate"] = integrity_result["passed_files"] / integrity_result["total_files"] * 100 if integrity_result["total_files"] > 0 else 0
 
         return integrity_result
 
     def _generate_statistics_report(self, valid_files: List[str], result: CleaningResult) -> Dict[str, Any]:
         """
-        统计分析报告阶段
+        统计分析报告阶段（多线程并行）
 
         对清洗后的数据生成详细的统计分析报告：
         1. 类别分布统计
@@ -641,44 +924,94 @@ class LabelMeCleaner:
             stats_result["message"] = "无有效文件需要统计"
             return stats_result
 
-        annotation_counts_list = []
-        file_sizes = []
-        shape_types = {}
+        annotation_counts_list: List[int] = []
+        file_sizes: List[int] = []
+        shape_types: Dict[str, int] = {}
+        label_distribution: Dict[str, int] = {}
+        processed_files = 0
+        failed_files = 0
+        total_annotations = 0
+        total_size_bytes = 0
 
-        for json_file in valid_files:
+        ann_list_lock = threading.Lock()
+        size_list_lock = threading.Lock()
+        shape_lock = threading.Lock()
+        label_lock = threading.Lock()
+        processed_lock = threading.Lock()
+        failed_lock = threading.Lock()
+        total_ann_lock = threading.Lock()
+        total_size_lock = threading.Lock()
+
+        def _stats_single_file(json_file: str):
+            nonlocal processed_files, failed_files, total_annotations, total_size_bytes
             json_path = Path(json_file)
+            file_annotations = 0
+            file_size = 0
+            file_labels: Dict[str, int] = {}
+            file_shapes: Dict[str, int] = {}
+            file_processed = 0
+            file_failed = 0
+
             try:
                 file_size = json_path.stat().st_size
-                file_sizes.append(file_size)
-                stats_result["file_size_stats"]["total_size_bytes"] += file_size
 
-                with open(json_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
+                data = parse_json_file(json_path)
+                if data is None:
+                    file_failed = 1
+                    self.logger.warning(f"统计处理失败: {json_path.name} - JSON解析失败")
+                    raise ValueError("JSON解析失败")
 
                 shapes = data.get("shapes", [])
-                annotation_count = len(shapes)
-                annotation_counts_list.append(annotation_count)
-                stats_result["annotation_counts"]["total_annotations"] += annotation_count
+                file_annotations = len(shapes)
 
                 for shape in shapes:
                     label = shape.get("label", "unknown")
-                    if label not in stats_result["label_distribution"]:
-                        stats_result["label_distribution"][label] = 0
-                    stats_result["label_distribution"][label] += 1
+                    file_labels[label] = file_labels.get(label, 0) + 1
 
                     shape_type = shape.get("shape_type", shape.get("type", "unknown"))
-                    if shape_type not in shape_types:
-                        shape_types[shape_type] = 0
-                    shape_types[shape_type] += 1
+                    file_shapes[shape_type] = file_shapes.get(shape_type, 0) + 1
 
-                stats_result["processed_files"] += 1
+                file_processed = 1
 
             except Exception as e:
-                stats_result["failed_files"] += 1
+                file_failed = 1
                 self.logger.warning(f"统计处理失败: {json_path.name} - {e}")
+
+            with size_list_lock:
+                file_sizes.append(file_size)
+            with ann_list_lock:
+                annotation_counts_list.append(file_annotations)
+            with shape_lock:
+                for st, cnt in file_shapes.items():
+                    shape_types[st] = shape_types.get(st, 0) + cnt
+            with label_lock:
+                for lbl, cnt in file_labels.items():
+                    label_distribution[lbl] = label_distribution.get(lbl, 0) + cnt
+            with processed_lock:
+                processed_files += file_processed
+            with failed_lock:
+                failed_files += file_failed
+            with total_ann_lock:
+                total_annotations += file_annotations
+            with total_size_lock:
+                total_size_bytes += file_size
 
             if self._phase_manager:
                 self._phase_manager.update(1)
+
+        if self.max_workers > 1 and len(valid_files) > 1:
+            self.logger.info(f"使用 {self.max_workers} 个线程并行统计")
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                executor.map(_stats_single_file, valid_files)
+        else:
+            for json_file in valid_files:
+                _stats_single_file(json_file)
+
+        stats_result["processed_files"] = processed_files
+        stats_result["failed_files"] = failed_files
+        stats_result["label_distribution"] = label_distribution
+        stats_result["annotation_counts"]["total_annotations"] = total_annotations
+        stats_result["file_size_stats"]["total_size_bytes"] = total_size_bytes
 
         if annotation_counts_list:
             stats_result["annotation_counts"]["avg_per_file"] = sum(annotation_counts_list) / len(annotation_counts_list)
@@ -788,28 +1121,49 @@ class LabelMeCleaner:
         self._phase_manager.start_phase("copy", valid_count)
         self.logger.info(f"复制阶段: 处理 {valid_count} 个合规文件")
 
+        valid_vrs = [vr for vr in validation_results if vr.is_valid()]
+        duplicate_vrs = [vr for vr in validation_results if vr.status == ValidationStatus.DUPLICATE_ANNOTATION]
+        invalid_vrs = [vr for vr in validation_results if not vr.is_valid() and vr.status != ValidationStatus.DUPLICATE_ANNOTATION]
+
+        result.duplicate_count = len(duplicate_vrs)
+        result.duplicate_files = [{"file": vr.json_path, "status": vr.status.value, "reason": vr.error_message, "image_file": vr.image_path} for vr in duplicate_vrs]
+        result.invalid_count = len(invalid_vrs)
+        result.invalid_files = [{"file": vr.json_path, "status": vr.status.value, "reason": vr.error_message} for vr in invalid_vrs]
+
+        result.valid_count = valid_count
+        result.valid_files = [vr.json_path for vr in valid_vrs]
+
+        copied_json_files: List[str] = []
+        copied_image_files: List[str] = []
+        json_lock = threading.Lock()
+        image_lock = threading.Lock()
         copy_counter = 0
-        for vr in validation_results:
-            if vr.is_valid():
-                result.valid_count += 1
-                result.valid_files.append(vr.json_path)
+        counter_lock = threading.Lock()
 
-                image_path = Path(vr.image_path) if vr.image_path else None
-                copied_json, copied_image = self._copy_valid_file(Path(vr.json_path), image_path)
-
-                if copied_json:
-                    result.copied_json_files.append(copied_json)
-                if copied_image:
-                    result.copied_image_files.append(copied_image)
-
+        def _copy_single_valid(vr: ValidationResult):
+            nonlocal copy_counter
+            image_path = Path(vr.image_path) if vr.image_path else None
+            copied_json, copied_image = self._copy_valid_file(Path(vr.json_path), image_path)
+            if copied_json:
+                with json_lock:
+                    copied_json_files.append(copied_json)
+            if copied_image:
+                with image_lock:
+                    copied_image_files.append(copied_image)
+            with counter_lock:
                 copy_counter += 1
                 self._phase_manager.update(1)
-            elif vr.status == ValidationStatus.DUPLICATE_ANNOTATION:
-                result.duplicate_count += 1
-                result.duplicate_files.append({"file": vr.json_path, "status": vr.status.value, "reason": vr.error_message, "image_file": vr.image_path})
-            else:
-                result.invalid_count += 1
-                result.invalid_files.append({"file": vr.json_path, "status": vr.status.value, "reason": vr.error_message})
+
+        if self.max_workers > 1 and len(valid_vrs) > 1:
+            self.logger.info(f"使用 {self.max_workers} 个线程并行复制文件")
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                executor.map(_copy_single_valid, valid_vrs)
+        else:
+            for vr in valid_vrs:
+                _copy_single_valid(vr)
+
+        result.copied_json_files = copied_json_files
+        result.copied_image_files = copied_image_files
 
         self._phase_manager.complete_phase("copy")
 
@@ -880,7 +1234,42 @@ def clean_labelme_data(
     enable_integrity_check: bool = True,
     enable_statistics_report: bool = True,
     format_output_dir: Optional[str] = None,
+    format_subdir_name: str = "adv_label",
+    cleaned_subdir_name: str = "cleaned_data",
+    pretty_format_json: bool = False,
+    label_mapping: Optional[Dict[str, str]] = None,
+    download_remote_images: bool = False,
+    remote_image_download_dir: Optional[str] = None,
 ) -> CleaningResult:
+    """
+    清洗LabelMe标注数据
+
+    Args:
+        source_dir: 源目录路径
+        target_dir: 目标目录路径
+        preserve_structure: 是否保留目录结构
+        copy_images: 是否复制图片文件
+        deduplicate: 是否去除重复标注文件
+        generate_report: 是否生成清洗报告
+        report_path: 报告文件路径
+        log_file: 日志文件路径
+        progress_callback: 进度回调函数
+        use_tqdm: 是否使用tqdm进度条
+        max_workers: 最大线程数
+        enable_format_conversion: 是否启用格式转换
+        enable_integrity_check: 是否启用完整性验证
+        enable_statistics_report: 是否启用统计分析报告
+        format_output_dir: 格式转换输出目录(可选,若未指定则使用target_dir/format_subdir_name)
+        format_subdir_name: 格式转换子目录名称,默认"adv_label"
+        cleaned_subdir_name: 清洗后标注数据子目录名称,默认"cleaned_data"
+        pretty_format_json: 是否格式化JSON输出
+        label_mapping: 类别映射字典 {"原始类别": "目标类别"}
+        download_remote_images: 是否下载远程图片（imageUrl）
+        remote_image_download_dir: 远程图片下载目录
+
+    Returns:
+        CleaningResult: 清洗结果对象
+    """
     cleaner = LabelMeCleaner(
         source_dir=source_dir,
         target_dir=target_dir,
@@ -897,6 +1286,12 @@ def clean_labelme_data(
         enable_integrity_check=enable_integrity_check,
         enable_statistics_report=enable_statistics_report,
         format_output_dir=format_output_dir,
+        format_subdir_name=format_subdir_name,
+        cleaned_subdir_name=cleaned_subdir_name,
+        pretty_format_json=pretty_format_json,
+        label_mapping=label_mapping,
+        download_remote_images=download_remote_images,
+        remote_image_download_dir=remote_image_download_dir,
     )
 
     return cleaner.clean()
@@ -1317,13 +1712,6 @@ class LabelMeLabelStatistics:
                         self.logger.warning(f"处理异常: {json_path} - {e}")
         else:
             for i, json_path in enumerate(json_files, 1):
-                if self._pbar:
-                    self._pbar.update(1)
-                elif self.progress_callback:
-                    self.progress_callback(json_path.name, i, len(json_files))
-                else:
-                    self.logger.debug(f"[{i}/{len(json_files)}] 处理: {json_path.name}")
-
                 process_result = self._process_single_file(json_path, global_dict, global_lock, counter, counter_lock)
 
                 if process_result["success"]:
@@ -1332,6 +1720,13 @@ class LabelMeLabelStatistics:
                     self.logger.debug(f"[{i}/{len(json_files)}] 跳过(无imageUrl): {json_path.name}")
                 elif process_result["error_type"] == "parse_error":
                     self.logger.debug(f"[{i}/{len(json_files)}] 跳过(解析错误): {json_path.name}")
+
+                if self._pbar:
+                    self._pbar.update(1)
+                elif self.progress_callback:
+                    self.progress_callback(json_path.name, i, len(json_files))
+                else:
+                    self.logger.debug(f"[{i}/{len(json_files)}] 已处理: {json_path.name}")
 
         result.processed_files = counter["processed_files"]
         result.skipped_files = counter["skipped_files"]
@@ -1453,9 +1848,7 @@ def statistics_main():
 
     if args.output:
         output_path = Path(args.output)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(result.to_structured_dict(), f, indent=2, ensure_ascii=False)
+        write_json_file(output_path, result.to_structured_dict(), indent=2)
         print(f"\n统计结果已保存到: {args.output}")
 
     if result.duration:
@@ -1544,15 +1937,10 @@ class StatisticsFileProcessor:
             self.logger.error(f"统计文件不存在: {self.statistics_file}")
             return None
 
-        try:
-            with open(self.statistics_file, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except json.JSONDecodeError as e:
-            self.logger.error(f"JSON解析错误: {e}")
-            return None
-        except Exception as e:
-            self.logger.error(f"文件读取错误: {e}")
-            return None
+        data = parse_json_file(self.statistics_file, self.logger)
+        if data is None:
+            self.logger.error("统计文件解析失败")
+        return data
 
     def _extract_json_files(self, data: Dict) -> Set[str]:
         """
@@ -1675,11 +2063,6 @@ class StatisticsFileProcessor:
             )
 
         for i, json_file in enumerate(sorted_files, 1):
-            if self._pbar:
-                self._pbar.update(1)
-            elif self.progress_callback:
-                self.progress_callback(Path(json_file).name, i, len(sorted_files))
-
             self.logger.info(f"[{i}/{len(sorted_files)}] 处理: {json_file}")
 
             json_path = source_dir / json_file
@@ -1688,20 +2071,24 @@ class StatisticsFileProcessor:
                 result.skipped_files += 1
                 result.missing_files.append(json_file)
                 self.logger.warning(f"[{i}/{len(sorted_files)}] 文件不存在: {json_file}")
-                continue
+            else:
+                copied_json = self._copy_file(json_path, self.target_dir)
+                if copied_json:
+                    result.copied_files += 1
+                    result.copied_file_paths.append(copied_json)
+                    self.logger.info(f"[{i}/{len(sorted_files)}] 已复制: {json_file}")
 
-            copied_json = self._copy_file(json_path, self.target_dir)
-            if copied_json:
-                result.copied_files += 1
-                result.copied_file_paths.append(copied_json)
-                self.logger.info(f"[{i}/{len(sorted_files)}] 已复制: {json_file}")
+                if self.copy_images:
+                    image_path = find_image_file(json_path)
+                    if image_path:
+                        copied_image = self._copy_file(image_path, self.target_dir)
+                        if copied_image:
+                            self.logger.info(f"[{i}/{len(sorted_files)}] 已复制图片: {image_path.name}")
 
-            if self.copy_images:
-                image_path = find_image_file(json_path)
-                if image_path:
-                    copied_image = self._copy_file(image_path, self.target_dir)
-                    if copied_image:
-                        self.logger.info(f"[{i}/{len(sorted_files)}] 已复制图片: {image_path.name}")
+            if self._pbar:
+                self._pbar.update(1)
+            elif self.progress_callback:
+                self.progress_callback(Path(json_file).name, i, len(sorted_files))
 
         result.end_time = datetime.now()
 
@@ -1799,8 +2186,7 @@ def process_main():
     if args.report:
         report_path = Path(args.report)
         report_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(report_path, "w", encoding="utf-8") as f:
-            json.dump(result.to_dict(), f, indent=2, ensure_ascii=False)
+        write_json_file(report_path, result.to_dict(), indent=2)
         print(f"\n处理报告已保存到: {args.report}")
 
     if result.duration:

@@ -16,6 +16,7 @@
 
 import sys
 import logging
+from pathlib import Path
 from typing import Optional, Set, List, Dict, Any
 from datetime import datetime
 
@@ -29,8 +30,18 @@ try:
         from IPython import get_ipython
 
         ip = get_ipython()
-        if ip is not None and "IPKernelApp" in ip.config:
-            IN_NOTEBOOK = True
+        if ip is not None:
+            shell_class_name = type(ip).__name__
+            if shell_class_name == "ZMQInteractiveShell":
+                IN_NOTEBOOK = True
+            elif "google.colab" in str(ip):
+                IN_NOTEBOOK = True
+            else:
+                try:
+                    if "IPKernelApp" in ip.config:
+                        IN_NOTEBOOK = True
+                except Exception:
+                    pass
     except Exception:
         pass
 
@@ -40,7 +51,12 @@ try:
 
             TQDM_AVAILABLE = True
         except ImportError:
-            pass
+            try:
+                from tqdm import tqdm
+
+                TQDM_AVAILABLE = True
+            except ImportError:
+                pass
     else:
         try:
             from tqdm import tqdm
@@ -95,6 +111,8 @@ def setup_progress_logging(
         logger.addHandler(console_handler)
 
     if log_file:
+        log_file = Path(log_file).absolute()
+        log_file.parent.mkdir(parents=True, exist_ok=True)
         file_handler = logging.FileHandler(log_file, encoding="utf-8")
         file_handler.setLevel(log_level)
         file_handler.setFormatter(formatter)
@@ -142,18 +160,30 @@ def create_progress_bar(
             **kwargs,
         )
     elif tqdm is not None:
-        return tqdm(
-            total=total,
-            desc=desc,
-            unit=unit,
-            position=0,
-            leave=True,
-            mininterval=mininterval,
-            maxinterval=maxinterval,
-            file=sys.stderr,
-            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
-            **kwargs,
-        )
+        if IN_NOTEBOOK:
+            return tqdm(
+                total=total,
+                desc=desc,
+                unit=unit,
+                leave=True,
+                mininterval=mininterval,
+                maxinterval=maxinterval,
+                file=sys.stdout,
+                **kwargs,
+            )
+        else:
+            return tqdm(
+                total=total,
+                desc=desc,
+                unit=unit,
+                position=0,
+                leave=True,
+                mininterval=mininterval,
+                maxinterval=maxinterval,
+                file=sys.stderr,
+                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
+                **kwargs,
+            )
 
     return None
 
@@ -161,12 +191,12 @@ def create_progress_bar(
 class PhaseProgressManager:
     """
     分段进度条管理器
-    
+
     管理多阶段任务的进度条，每个阶段独立显示进度条：
     - 阶段开始时显示阶段描述和预期进度
     - 阶段执行时实时更新进度
     - 阶段结束时显示完成信息并关闭进度条
-    
+
     Attributes:
         phases: 阶段名称列表
         current_phase_index: 当前阶段索引
@@ -188,7 +218,7 @@ class PhaseProgressManager:
     def __init__(self, phases: List[str], use_tqdm: bool = True):
         """
         初始化分段进度条管理器
-        
+
         Args:
             phases: 阶段名称列表，如 ["validation", "deduplication", "copy"]
             use_tqdm: 是否使用tqdm进度条
@@ -217,7 +247,7 @@ class PhaseProgressManager:
     def start_phase(self, phase: str, total: int) -> None:
         """
         开始一个新阶段
-        
+
         Args:
             phase: 阶段名称
             total: 该阶段的总量
@@ -248,7 +278,7 @@ class PhaseProgressManager:
     def update(self, n: int = 1, message: Optional[str] = None) -> None:
         """
         更新当前阶段的进度
-        
+
         Args:
             n: 更新的数量，默认为1
             message: 可选的进度消息
@@ -273,7 +303,7 @@ class PhaseProgressManager:
     def set_description(self, desc: str) -> None:
         """
         设置进度条描述
-        
+
         Args:
             desc: 新的描述文字
         """
@@ -303,7 +333,7 @@ class PhaseProgressManager:
     def complete_phase(self, phase: Optional[str] = None) -> None:
         """
         完成指定阶段或当前阶段
-        
+
         Args:
             phase: 要完成的阶段名称，None则完成当前阶段
         """
@@ -319,10 +349,10 @@ class PhaseProgressManager:
     def complete_all(self, show_summary: bool = True) -> Dict[str, Any]:
         """
         完成所有阶段并显示汇总
-        
+
         Args:
             show_summary: 是否显示完成汇总
-            
+
         Returns:
             Dict: 包含各阶段执行信息的汇总字典
         """
@@ -367,7 +397,7 @@ class PhaseProgressManager:
     def get_progress_info(self) -> Dict[str, Any]:
         """
         获取当前进度信息
-        
+
         Returns:
             Dict: 包含当前进度信息的字典
         """
@@ -389,7 +419,7 @@ class PhaseProgressManager:
 def print_phase_header(phase_name: str, phase_index: int, total_phases: int) -> None:
     """
     打印阶段头信息（用于非tqdm模式）
-    
+
     Args:
         phase_name: 阶段名称
         phase_index: 阶段索引（从0开始）
@@ -404,7 +434,7 @@ def print_phase_header(phase_name: str, phase_index: int, total_phases: int) -> 
 def print_phase_footer(phase_name: str, completed: int, total: int) -> None:
     """
     打印阶段完成信息（用于非tqdm模式）
-    
+
     Args:
         phase_name: 阶段名称
         completed: 完成数量
