@@ -1,13 +1,21 @@
 #!/usr/bin/env python
-"""Unsloth分布式训练脚本 - Gemma 4-E4B (8x A6000优化版)
+"""Unsloth分布式训练脚本 - Gemma 4-E4B (统一配置版)
 
-支持DDP和FSDP分布式训练模式, 针对8张NVIDIA A6000 GPU (48GB)优化。
+支持DDP/device_map/FSDP分布式训练模式, 通过DistributedConfig统一配置。
+针对8张NVIDIA A6000 GPU (48GB)优化。
 
 启动命令示例:
-  # DDP 8卡训练 (推荐)
+  # DDP 8卡训练 (推荐, 小模型)
   torchrun --nproc_per_node=8 train_distributed.py --use_ddp --vision_mode ...
 
-  # FSDP 8卡训练
+  # DDP 8卡 + 2倍吞吐 (小模型, models_per_gpu=2)
+  torchrun --nproc_per_node=8 train_distributed.py --use_ddp --models_per_gpu 2 --vision_mode ...
+
+  # device_map 2D并行: 8卡分4组, 每组2卡承载1个大模型
+  torchrun --nproc_per_node=4 train_distributed.py --use_ddp \
+      --device_map balanced --gpu_groups '[[0,1],[2,3],[4,5],[6,7]]' --vision_mode ...
+
+  # FSDP 8卡训练 (大模型31B+)
   torchrun --nproc_per_node=8 train_distributed.py --use_fsdp --vision_mode ...
 
   # 多机多卡
@@ -15,11 +23,14 @@
       --master_addr="192.168.1.1" --master_port=29500 \
       train_distributed.py --use_fsdp --vision_mode ...
 
+  # 使用配置文件启动
+  torchrun --nproc_per_node=8 train_distributed.py --distributed_config config.json
+
 8x A6000优化要点:
   - BF16混合精度 (A6000 Ampere架构原生支持)
   - 每GPU batch_size=4 (QLoRA E4B仅需~10GB, 48GB充足)
   - 梯度累积=2 (有效batch=4*2*8=64)
-  - 学习率线性缩放: lr = base_lr * sqrt(world_size)
+  - 学习率线性缩放: lr = base_lr * world_size
   - NCCL P2P通信优化 (A6000 NVLink)
   - GPU显存/利用率实时监控
 """
@@ -32,26 +43,39 @@ import sys
 import time
 from pathlib import Path
 
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+
 import argparse
 import torch
 import torch.distributed as dist
 
 from unsloth import FastVisionModel
 
+from distributed_config import (
+    DistributedConfig,
+    DistributedMode,
+    auto_detect_config,
+    create_ddp_config,
+    create_device_map_config,
+    create_fsdp_config,
+)
+
 logging.basicConfig(level=logging.INFO if int(os.environ.get("LOCAL_RANK", 0)) == 0 else logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Unsloth分布式训练脚本 (8x A6000优化版)")
+    parser = argparse.ArgumentParser(description="Unsloth分布式训练脚本 (统一配置版)")
 
     parser.add_argument("--model_name", type=str, required=True)
     parser.add_argument("--data_path", type=str, required=True)
     parser.add_argument("--output_dir", type=str, required=True)
 
     parser.add_argument("--max_seq_length", type=int, default=2048)
-    parser.add_argument("--load_in_4bit", type=bool, default=True)
-    parser.add_argument("--device_map", type=str, default=None, help="模型分片策略 (仅用于模型并行, DDP模式下不应设置)")
+    parser.add_argument("--load_in_4bit", action="store_true", default=True)
+    parser.add_argument("--no_load_in_4bit", action="store_true", default=False)
 
     parser.add_argument("--lora_r", type=int, default=16)
     parser.add_argument("--lora_alpha", type=int, default=16)
@@ -60,9 +84,9 @@ def parse_args():
     parser.add_argument("--per_device_batch_size", type=int, default=4)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=2)
     parser.add_argument("--learning_rate", type=float, default=4e-5)
-    parser.add_argument("--lr_scaling", type=str, default="linear", choices=["none", "linear", "sqrt"], help="多GPU学习率缩放策略: none=不缩放, linear=线性缩放, sqrt=平方根缩放")
+    parser.add_argument("--lr_scaling", type=str, default="linear", choices=["none", "linear", "sqrt"])
     parser.add_argument("--num_epochs", type=int, default=1)
-    parser.add_argument("--warmup_ratio", type=float, default=0.06, help="预热比例, 加载数据集后自动转换为warmup_steps (v5.2弃用warmup_ratio)")
+    parser.add_argument("--warmup_ratio", type=float, default=0.06)
     parser.add_argument("--weight_decay", type=float, default=0.01)
     parser.add_argument("--max_grad_norm", type=float, default=1.0)
     parser.add_argument("--optim", type=str, default="adamw_8bit")
@@ -73,6 +97,16 @@ def parse_args():
 
     parser.add_argument("--use_ddp", action="store_true")
     parser.add_argument("--use_fsdp", action="store_true")
+
+    parser.add_argument("--models_per_gpu", type=int, default=1, help="每GPU吞吐量倍数 (DDP小模型模式), 映射到batch_size缩放. 例: 8卡×2倍=16路并行")
+    parser.add_argument("--gpu_ids", type=str, default=None, help="参与训练的GPU列表, 如'0,1,2,3,4,5,6,7'")
+    parser.add_argument("--gpu_groups", type=str, default=None, help="GPU分组配置(JSON), 如'[[0,1],[2,3],[4,5],[6,7]]'. 每组承载1个完整模型(组内模型并行, 组间数据并行)")
+    parser.add_argument("--device_map", type=str, default=None, help="模型分片策略: balanced/auto/balanced_low_0 (仅用于模型并行模式, DDP模式下不应设置)")
+    parser.add_argument("--max_memory_per_gpu", type=str, default=None, help='每GPU最大可用显存(JSON), 如\'{"0":"40GiB","1":"40GiB"}\'')
+    parser.add_argument("--distributed_config", type=str, default=None, help="DistributedConfig JSON配置文件路径 (覆盖其他参数)")
+
+    parser.add_argument("--auto_detect", action="store_true", help="自动检测最优分布式模式 (根据模型显存需求和GPU资源)")
+    parser.add_argument("--model_vram_gb", type=float, default=10.0, help="模型所需显存(GB), 用于auto_detect模式")
 
     parser.add_argument("--seed", type=int, default=3407)
     parser.add_argument("--bf16", action="store_true", default=True)
@@ -87,6 +121,112 @@ def parse_args():
     parser.add_argument("--benchmark", action="store_true", help="运行基准测试并输出对比数据")
 
     return parser.parse_args()
+
+
+def build_config_from_args(args) -> DistributedConfig:
+    """从命令行参数构建DistributedConfig
+
+    支持三种方式:
+      1. --distributed_config: 直接从JSON文件加载
+      2. --auto_detect: 根据model_vram_gb自动选择模式
+      3. 手动指定: --use_ddp/--use_fsdp + --models_per_gpu/--gpu_groups等
+    """
+    if args.distributed_config is not None:
+        logger.info(f"从配置文件加载: {args.distributed_config}")
+        return DistributedConfig.from_json(args.distributed_config)
+
+    if args.auto_detect:
+        logger.info(f"自动检测模式, 模型显存需求: {args.model_vram_gb}GB")
+        return auto_detect_config(
+            model_vram_gb=args.model_vram_gb,
+            per_device_batch_size=args.per_device_batch_size,
+            gradient_accumulation_steps=args.gradient_accumulation_steps,
+            learning_rate=args.learning_rate,
+            lr_scaling=args.lr_scaling,
+            model_name=args.model_name,
+            data_path=args.data_path,
+            output_dir=args.output_dir,
+            max_seq_length=args.max_seq_length,
+            load_in_4bit=args.load_in_4bit and not args.no_load_in_4bit,
+            lora_r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            seed=args.seed,
+            bf16=args.bf16,
+            vision_mode=args.vision_mode,
+        )
+
+    gpu_ids = None
+    if args.gpu_ids is not None:
+        gpu_ids = [int(x.strip()) for x in args.gpu_ids.split(",")]
+
+    gpu_groups = None
+    if args.gpu_groups is not None:
+        gpu_groups = json.loads(args.gpu_groups)
+
+    max_memory = None
+    if args.max_memory_per_gpu is not None:
+        max_memory = json.loads(args.max_memory_per_gpu)
+
+    load_4bit = args.load_in_4bit and not args.no_load_in_4bit
+
+    if args.use_fsdp:
+        return create_fsdp_config(
+            gpu_ids=gpu_ids,
+            per_device_batch_size=args.per_device_batch_size,
+            gradient_accumulation_steps=args.gradient_accumulation_steps,
+            learning_rate=args.learning_rate,
+            lr_scaling=args.lr_scaling,
+            model_name=args.model_name,
+            data_path=args.data_path,
+            output_dir=args.output_dir,
+            max_seq_length=args.max_seq_length,
+            load_in_4bit=load_4bit,
+            lora_r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            seed=args.seed,
+            bf16=args.bf16,
+            vision_mode=args.vision_mode,
+        )
+
+    if args.device_map is not None or gpu_groups is not None:
+        return create_device_map_config(
+            gpu_groups=gpu_groups,
+            device_map_strategy=args.device_map or "balanced",
+            per_device_batch_size=args.per_device_batch_size,
+            gradient_accumulation_steps=args.gradient_accumulation_steps,
+            learning_rate=args.learning_rate,
+            lr_scaling=args.lr_scaling,
+            max_memory_per_gpu=max_memory,
+            model_name=args.model_name,
+            data_path=args.data_path,
+            output_dir=args.output_dir,
+            max_seq_length=args.max_seq_length,
+            load_in_4bit=load_4bit,
+            lora_r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            seed=args.seed,
+            bf16=args.bf16,
+            vision_mode=args.vision_mode,
+        )
+
+    return create_ddp_config(
+        gpu_ids=gpu_ids,
+        models_per_gpu=args.models_per_gpu,
+        per_device_batch_size=args.per_device_batch_size,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        learning_rate=args.learning_rate,
+        lr_scaling=args.lr_scaling,
+        model_name=args.model_name,
+        data_path=args.data_path,
+        output_dir=args.output_dir,
+        max_seq_length=args.max_seq_length,
+        load_in_4bit=load_4bit,
+        lora_r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        seed=args.seed,
+        bf16=args.bf16,
+        vision_mode=args.vision_mode,
+    )
 
 
 def setup_distributed():
@@ -129,18 +269,8 @@ def is_main_process():
     return dist.get_rank() == 0
 
 
-def scale_learning_rate(base_lr, world_size, scaling="sqrt"):
-    if scaling == "none" or world_size <= 1:
-        return base_lr
-    elif scaling == "linear":
-        return base_lr * world_size
-    elif scaling == "sqrt":
-        return base_lr * (world_size**0.5)
-    return base_lr
-
-
 def load_vision_data(data_path, max_workers=8):
-    from gemma4_multimodal_demo.dataset import MultimodalDataset
+    from dataset import MultimodalDataset
 
     data_file = Path(data_path)
     if not data_file.exists():
@@ -196,68 +326,29 @@ def load_text_data(data_path, tokenizer):
 def main():
     args = parse_args()
 
+    config = build_config_from_args(args)
+
     local_rank, world_size, is_distributed = setup_distributed()
 
-    effective_lr = scale_learning_rate(args.learning_rate, world_size, args.lr_scaling)
-
-    effective_batch = args.per_device_batch_size * args.gradient_accumulation_steps * world_size
+    effective_lr = config.effective_lr
+    effective_batch = config.effective_global_batch
 
     if is_main_process():
-        print("=" * 70)
-        print("Unsloth分布式训练 - Gemma 4-E4B (8x A6000优化版)")
-        print("=" * 70)
-        print(f"模型路径: {args.model_name}")
-        print(f"数据路径: {args.data_path}")
-        print(f"输出目录: {args.output_dir}")
-        print(f"分布式模式: {'DDP' if args.use_ddp else 'FSDP' if args.use_fsdp else '单GPU'}")
-        print(f"视觉模式: {'启用' if args.vision_mode else '禁用'}")
-        print(f"World Size: {world_size}")
-        print(f"混合精度: {'BF16' if args.bf16 else 'FP16' if args.fp16 else 'FP32'}")
-        print(f"每GPU批次: {args.per_device_batch_size}")
-        print(f"梯度累积: {args.gradient_accumulation_steps}")
-        print(f"有效全局批次: {effective_batch}")
-        print(f"学习率: {args.learning_rate} -> {effective_lr} (缩放策略: {args.lr_scaling})")
-        print(f"优化器: {args.optim}")
-        print(f"GPU监控: {'启用' if args.gpu_monitor else '禁用'}")
-        print("=" * 70)
+        print(config.summary())
 
     os.environ["UNSLOTH_DISABLE_STATISTICS"] = "1"
 
-    model_kwargs = {
-        "model_name": args.model_name,
-        "max_seq_length": args.max_seq_length,
-        "dtype": None,
-    }
-
-    if args.load_in_4bit:
-        model_kwargs["load_in_4bit"] = True
-
-    # device_map策略:
-    #   DDP模式: 不传device_map, 每进程独立加载完整模型到local_rank GPU
-    #   单GPU模式 + device_map指定: 传入device_map (仅用于模型并行, 如大模型31B+)
-    #   单GPU模式 + device_map=None: 不传device_map, 模型加载到默认GPU
-    #   注意: device_map与DDP互斥, DDP模式下必须为None
-    if args.use_ddp and args.device_map is not None:
-        logger.warning("DDP模式下不应设置device_map, 已自动忽略 (device_map与数据并行互斥)")
-        args.device_map = None
-
-    if args.device_map is not None:
-        model_kwargs["device_map"] = args.device_map
-    elif not is_distributed:
-        model_kwargs["device_map"] = {"": 0}
-
-    if args.vision_mode:
-        model_kwargs["disable_log_stats"] = True
-        model_load_fn = FastVisionModel.from_pretrained
-    else:
-        model_load_fn = FastVisionModel.from_pretrained
+    model_kwargs = config.get_model_kwargs()
 
     if is_main_process():
         logger.info("正在加载模型...")
+        dm = model_kwargs.get("device_map")
+        dm_desc = str(dm) if dm is not None else "None (每进程独立GPU)"
+        logger.info(f"device_map: {dm_desc}")
 
-    model, processor = model_load_fn(**model_kwargs)
+    model, processor = FastVisionModel.from_pretrained(**model_kwargs)
 
-    if args.vision_mode:
+    if config.vision_mode:
         tokenizer = processor.tokenizer
     else:
         tokenizer = processor
@@ -269,9 +360,9 @@ def main():
         logger.info("正在配置LoRA...")
 
     peft_kwargs = {
-        "r": args.lora_r,
-        "lora_alpha": args.lora_alpha,
-        "lora_dropout": args.lora_dropout,
+        "r": config.lora_r,
+        "lora_alpha": config.lora_alpha,
+        "lora_dropout": config.lora_dropout,
         "target_modules": [
             "q_proj",
             "k_proj",
@@ -283,74 +374,43 @@ def main():
         ],
         "bias": "none",
         "use_gradient_checkpointing": "unsloth",
-        "random_state": args.seed,
+        "random_state": config.seed,
         "use_rslora": False,
         "loftq_config": None,
     }
 
-    if args.vision_mode:
-        model = FastVisionModel.get_peft_model(model, **peft_kwargs)
-    else:
-        model = FastVisionModel.get_peft_model(model, **peft_kwargs)
+    model = FastVisionModel.get_peft_model(model, **peft_kwargs)
 
     if is_main_process():
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         total_params = sum(p.numel() for p in model.parameters())
         logger.info(f"可训练参数: {trainable_params:,} ({trainable_params / total_params * 100:.2f}%)")
 
-    if args.vision_mode:
-        dataset = load_vision_data(args.data_path, max_workers=args.max_workers)
+    if config.vision_mode:
+        dataset = load_vision_data(config.data_path, max_workers=args.max_workers)
     else:
-        dataset = load_text_data(args.data_path, tokenizer)
+        dataset = load_text_data(config.data_path, tokenizer)
 
-    use_bf16 = args.bf16 and torch.cuda.is_bf16_supported()
-    use_fp16 = args.fp16 or (not use_bf16 and not args.bf16)
+    training_kwargs = config.get_training_kwargs()
 
-    warmup_steps = max(1, int(len(dataset) * args.num_epochs / effective_batch * args.warmup_ratio))
+    warmup_steps = max(1, int(len(dataset) * config.num_epochs / config.effective_global_batch * config.warmup_ratio))
+    training_kwargs["warmup_steps"] = warmup_steps
+    training_kwargs["learning_rate"] = effective_lr
+    training_kwargs["output_dir"] = config.output_dir
+
     if is_main_process():
-        logger.info(f"预热: {args.warmup_ratio} ratio -> {warmup_steps} steps")
+        logger.info(f"预热: {config.warmup_ratio} ratio -> {warmup_steps} steps")
 
-    training_kwargs = {
-        "output_dir": args.output_dir,
-        "per_device_train_batch_size": args.per_device_batch_size,
-        "gradient_accumulation_steps": args.gradient_accumulation_steps,
-        "learning_rate": effective_lr,
-        "num_train_epochs": args.num_epochs,
-        "warmup_steps": warmup_steps,
-        "weight_decay": args.weight_decay,
-        "max_grad_norm": args.max_grad_norm,
-        "optim": args.optim,
-        "logging_steps": args.logging_steps,
-        "save_steps": args.save_steps,
-        "save_total_limit": args.save_total_limit,
-        "seed": args.seed,
-        "bf16": use_bf16,
-        "fp16": use_fp16,
-        "max_seq_length": args.max_seq_length,
-        "packing": False,
-        "report_to": "none",
-    }
-
-    if args.vision_mode:
+    if config.vision_mode:
         training_kwargs["remove_unused_columns"] = False
         training_kwargs["dataset_text_field"] = ""
 
-    if args.use_ddp:
+    if config.mode == DistributedMode.DDP.value:
         training_kwargs["ddp_find_unused_parameters"] = False
 
-    if args.use_fsdp:
-        fsdp_config_path = Path(__file__).parent / "fsdp_config.json"
-        if fsdp_config_path.exists():
-            with open(fsdp_config_path, "r") as f:
-                training_kwargs["fsdp_config"] = json.load(f)
-        else:
-            training_kwargs["fsdp_config"] = {
-                "fsdp_auto_wrap_policy": "TRANSFORMER_BASED_WRAP",
-                "fsdp_sharding_strategy": "FULL_SHARD",
-                "fsdp_backward_prefetch_policy": "BACKWARD_PRE",
-                "fsdp_use_orig_params": True,
-                "fsdp_sync_module_states": True,
-            }
+    if config.mode == DistributedMode.FSDP.value:
+        fsdp_cfg = config._load_fsdp_config()
+        training_kwargs["fsdp_config"] = fsdp_cfg
 
     from trl import SFTTrainer, SFTConfig
 
@@ -364,7 +424,7 @@ def main():
 
     callbacks = []
 
-    if args.vision_mode:
+    if config.vision_mode:
         from unsloth.trainer import UnslothVisionDataCollator
 
         trainer_kwargs["processing_class"] = processor.tokenizer
@@ -373,15 +433,15 @@ def main():
         trainer_kwargs["processing_class"] = tokenizer
         trainer_kwargs["dataset_text_field"] = "text"
 
-    if args.gpu_monitor:
-        from gemma4_multimodal_demo.gpu_monitor import GPUMonitor, GPUMonitorCallback
+    if config.gpu_monitor:
+        from gpu_monitor import GPUMonitor, GPUMonitorCallback
 
-        gpu_monitor = GPUMonitor(
-            log_dir=args.gpu_log_dir,
-            log_interval=args.gpu_log_interval,
+        gpu_monitor_inst = GPUMonitor(
+            log_dir=config.gpu_log_dir,
+            log_interval=config.gpu_log_interval,
             distributed_rank=int(os.environ.get("RANK", 0)),
         )
-        callbacks.append(GPUMonitorCallback(gpu_monitor, print_interval=100))
+        callbacks.append(GPUMonitorCallback(gpu_monitor_inst, print_interval=100))
 
     if callbacks:
         trainer_kwargs["callbacks"] = callbacks
@@ -419,33 +479,31 @@ def main():
         logger.info(f"最终Loss: {train_loss:.4f}")
         logger.info(f"吞吐量: {samples_per_sec:.2f} samples/s, {steps_per_sec:.4f} steps/s")
 
-        output_path = Path(args.output_dir)
+        output_path = Path(config.output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
 
-        model.save_pretrained(args.output_dir)
-        processor.save_pretrained(args.output_dir)
+        model.save_pretrained(config.output_dir)
+        processor.save_pretrained(config.output_dir)
 
-        logger.info(f"模型保存完成: {args.output_dir}")
+        logger.info(f"模型保存完成: {config.output_dir}")
 
+        config_dict = config.to_dict()
         training_result = {
-            "model_name": args.model_name,
-            "data_path": args.data_path,
-            "output_dir": args.output_dir,
-            "distributed_mode": "DDP" if args.use_ddp else "FSDP" if args.use_fsdp else "single",
+            "distributed_config": config_dict,
+            "distributed_mode": config.mode,
             "world_size": world_size,
-            "lora_r": args.lora_r,
-            "lora_alpha": args.lora_alpha,
-            "learning_rate_base": args.learning_rate,
+            "models_per_gpu": config.models_per_gpu,
+            "total_parallel_backward": config.total_parallel_backward,
+            "learning_rate_base": config.learning_rate,
             "learning_rate_effective": effective_lr,
-            "lr_scaling": args.lr_scaling,
-            "per_device_batch_size": args.per_device_batch_size,
-            "gradient_accumulation_steps": args.gradient_accumulation_steps,
+            "lr_scaling": config.lr_scaling,
+            "per_device_batch_size": config.per_device_batch_size,
+            "gradient_accumulation_steps": config.gradient_accumulation_steps,
             "effective_global_batch_size": effective_batch,
-            "num_epochs": args.num_epochs,
-            "max_seq_length": args.max_seq_length,
-            "bf16": use_bf16,
-            "fp16": use_fp16,
-            "optim": args.optim,
+            "num_epochs": config.num_epochs,
+            "max_seq_length": config.max_seq_length,
+            "lora_r": config.lora_r,
+            "lora_alpha": config.lora_alpha,
             "train_loss": train_loss,
             "train_runtime_sec": train_runtime,
             "samples_per_second": samples_per_sec,
