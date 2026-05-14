@@ -494,7 +494,7 @@ class DistributedConfig:
             kwargs["dataset_text_field"] = ""
 
         if self.mode == "ddp":
-            kwargs["ddp_find_unused_parameters"] = False
+            kwargs["ddp_find_unused_parameters"] = True
 
         if self.mode == "fsdp":
             fsdp_cfg = self._load_fsdp_config()

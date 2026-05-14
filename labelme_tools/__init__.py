@@ -29,12 +29,18 @@ from .labelme_cleaner import (
     ValidationResult,
     CleaningResult,
     LabelMeCleaner,
+    clean_labelme_data,
+)
+
+from .labelme_statistics import (
     LabelStatistics,
     LabelMeLabelStatistics,
+    statistics_labelme_labels,
+)
+
+from .labelme_stats_processor import (
     StatisticsFileProcessor,
     FilterCopyResult,
-    clean_labelme_data,
-    statistics_labelme_labels,
     process_statistics_file,
 )
 

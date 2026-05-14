@@ -7,12 +7,20 @@ WCAG 2.1 AA 颜色改进方案 - 最终版
 
 import sys
 
-from color_utils import (
-    hex_to_rgb,
-    srgb_to_linear,
-    get_relative_luminance,
-    calculate_contrast_ratio,
-)
+try:
+    from .color_utils import (
+        hex_to_rgb,
+        srgb_to_linear,
+        get_relative_luminance,
+        calculate_contrast_ratio,
+    )
+except ImportError:
+    from color_utils import (
+        hex_to_rgb,
+        srgb_to_linear,
+        get_relative_luminance,
+        calculate_contrast_ratio,
+    )
 
 
 if __name__ == '__main__':

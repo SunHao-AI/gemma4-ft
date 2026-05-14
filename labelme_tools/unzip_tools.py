@@ -494,25 +494,36 @@ def unzip_files(
 
 
 def main():
-    """主函数示例"""
+    """解压工具CLI主函数"""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="压缩文件解压工具")
+    parser.add_argument("source_dir", help="源目录路径（包含压缩文件）")
+    parser.add_argument("-o", "--output", required=True, help="目标解压目录路径")
+    parser.add_argument("--log", help="日志文件路径")
+    parser.add_argument("--workers", "-w", type=int, default=4, help="最大线程数，默认4")
+
+    args = parser.parse_args()
+
     print("=" * 60)
     print("压缩文件解压工具")
     print("=" * 60)
-
-    source_dir = r"/raid5/sh/data/102_inference_zip"
-    target_dir = r"/raid5/sh/data/102_inference"
-    log_file = r"/raid5/sh/data/102_inference-unzip_log.txt"
-
-    print(f"源目录: {source_dir}")
-    print(f"目标目录: {target_dir}")
-    print(f"日志文件: {log_file}")
+    print(f"源目录: {args.source_dir}")
+    print(f"目标目录: {args.output}")
+    print(f"日志文件: {args.log or '无'}")
     print("-" * 60)
 
     def progress_callback(filename: str, current: int, total: int):
         percent = (current / total) * 100
         print(f"\r进度: [{current}/{total}] {percent:.1f}% - {filename}", end="", flush=True)
 
-    result = unzip_files(source_dir=source_dir, target_dir=target_dir, log_file=log_file, progress_callback=progress_callback)
+    result = unzip_files(
+        source_dir=args.source_dir,
+        target_dir=args.output,
+        log_file=args.log,
+        progress_callback=progress_callback,
+        max_workers=args.workers,
+    )
 
     print("\n")
     print("=" * 60)

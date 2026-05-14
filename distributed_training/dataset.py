@@ -29,7 +29,6 @@ import gc
 import json
 import logging
 import os
-import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional, Union
@@ -38,11 +37,19 @@ from PIL import Image as PILImage
 from datasets import Dataset
 
 try:
-    from tqdm import tqdm
-    TQDM_AVAILABLE = True
+    from labelme_tools.progress_logger import TQDM_AVAILABLE, create_progress_bar
 except ImportError:
-    TQDM_AVAILABLE = False
-    tqdm = None
+    try:
+        from tqdm import tqdm as _tqdm_class
+        TQDM_AVAILABLE = True
+
+        def create_progress_bar(total=None, desc="", unit="it", **kwargs):
+            return _tqdm_class(total=total, desc=desc, unit=unit, **kwargs)
+    except ImportError:
+        TQDM_AVAILABLE = False
+
+        def create_progress_bar(total=None, desc="", unit="it", **kwargs):
+            return None
 
 logger = logging.getLogger(__name__)
 
@@ -212,11 +219,10 @@ class MultimodalDataset:
         if self.show_progress:
             print(f"开始预加载 {total_count} 张图片...")
             print_memory_status("加载前内存")
-            pbar = tqdm(
+            pbar = create_progress_bar(
                 total=total_count,
                 desc="加载图片",
                 unit="张",
-                file=sys.stdout,
             )
         else:
             logger.info("预加载 %d 张图片 (线程数: %d)...", total_count, self.max_workers)
@@ -288,7 +294,7 @@ class MultimodalDataset:
         
         desc = f"加载批次[{start_idx}-{end_idx}]"
         if self.show_progress:
-            pbar = tqdm(total=batch_count, desc=desc, unit="张", file=sys.stdout)
+            pbar = create_progress_bar(total=batch_count, desc=desc, unit="张")
         else:
             pbar = None
 
@@ -436,11 +442,10 @@ class MultimodalDataset:
         result = []
         
         if self.show_progress:
-            pbar = tqdm(
+            pbar = create_progress_bar(
                 total=total,
                 desc="数据转换",
                 unit="条",
-                file=sys.stdout,
             )
             check_interval = max(1, total // 20)
         else:
@@ -494,11 +499,10 @@ class MultimodalDataset:
         all_messages = []
         
         if self.show_progress:
-            pbar = tqdm(
+            pbar = create_progress_bar(
                 total=total,
                 desc="数据转换",
                 unit="条",
-                file=sys.stdout,
             )
             check_interval = max(1, total // 20)
         else:
@@ -562,11 +566,10 @@ class MultimodalDataset:
         all_messages = []
 
         if self.show_progress:
-            batch_pbar = tqdm(
+            batch_pbar = create_progress_bar(
                 total=num_batches,
                 desc="批次处理",
                 unit="批",
-                file=sys.stdout,
             )
         else:
             batch_pbar = None

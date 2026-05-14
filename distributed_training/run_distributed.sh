@@ -182,7 +182,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun \
 echo ""
 echo "========== 配置文件启动示例 =========="
 echo "1. 生成配置文件 (Python交互式):"
-echo "   from gemma4_multimodal_demo import create_ddp_config"
+echo "   from distributed_training import create_ddp_config"
 echo "   config = create_ddp_config(gpu_ids=[0,1,2,3,4,5,6,7], models_per_gpu=2)"
 echo "   config.to_json('my_config.json')"
 echo ""

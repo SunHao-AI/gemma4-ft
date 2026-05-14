@@ -39,28 +39,33 @@ import gc
 import json
 import logging
 import os
-import sys
 import time
 from pathlib import Path
 
-_SCRIPT_DIR = Path(__file__).resolve().parent
-if str(_SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(_SCRIPT_DIR))
+try:
+    from distributed_training.distributed_config import (
+        DistributedConfig,
+        DistributedMode,
+        auto_detect_config,
+        create_ddp_config,
+        create_device_map_config,
+        create_fsdp_config,
+    )
+except ImportError:
+    from distributed_config import (
+        DistributedConfig,
+        DistributedMode,
+        auto_detect_config,
+        create_ddp_config,
+        create_device_map_config,
+        create_fsdp_config,
+    )
 
 import argparse
 import torch
 import torch.distributed as dist
 
 from unsloth import FastVisionModel
-
-from distributed_config import (
-    DistributedConfig,
-    DistributedMode,
-    auto_detect_config,
-    create_ddp_config,
-    create_device_map_config,
-    create_fsdp_config,
-)
 
 logging.basicConfig(level=logging.INFO if int(os.environ.get("LOCAL_RANK", 0)) == 0 else logging.WARNING)
 logger = logging.getLogger(__name__)
@@ -153,6 +158,9 @@ def build_config_from_args(args) -> DistributedConfig:
             seed=args.seed,
             bf16=args.bf16,
             vision_mode=args.vision_mode,
+            gpu_monitor=args.gpu_monitor,
+            gpu_log_dir=args.gpu_log_dir,
+            gpu_log_interval=args.gpu_log_interval,
         )
 
     gpu_ids = None
@@ -168,6 +176,12 @@ def build_config_from_args(args) -> DistributedConfig:
         max_memory = json.loads(args.max_memory_per_gpu)
 
     load_4bit = args.load_in_4bit and not args.no_load_in_4bit
+
+    gpu_monitor_kwargs = {
+        "gpu_monitor": args.gpu_monitor,
+        "gpu_log_dir": args.gpu_log_dir,
+        "gpu_log_interval": args.gpu_log_interval,
+    }
 
     if args.use_fsdp:
         return create_fsdp_config(
@@ -186,6 +200,7 @@ def build_config_from_args(args) -> DistributedConfig:
             seed=args.seed,
             bf16=args.bf16,
             vision_mode=args.vision_mode,
+            **gpu_monitor_kwargs,
         )
 
     if args.device_map is not None or gpu_groups is not None:
@@ -207,6 +222,7 @@ def build_config_from_args(args) -> DistributedConfig:
             seed=args.seed,
             bf16=args.bf16,
             vision_mode=args.vision_mode,
+            **gpu_monitor_kwargs,
         )
 
     return create_ddp_config(
@@ -226,6 +242,7 @@ def build_config_from_args(args) -> DistributedConfig:
         seed=args.seed,
         bf16=args.bf16,
         vision_mode=args.vision_mode,
+        **gpu_monitor_kwargs,
     )
 
 
@@ -270,7 +287,10 @@ def is_main_process():
 
 
 def load_vision_data(data_path, max_workers=8):
-    from dataset import MultimodalDataset
+    try:
+        from distributed_training.dataset import MultimodalDataset
+    except ImportError:
+        from dataset import MultimodalDataset
 
     data_file = Path(data_path)
     if not data_file.exists():
@@ -386,6 +406,18 @@ def main():
         total_params = sum(p.numel() for p in model.parameters())
         logger.info(f"可训练参数: {trainable_params:,} ({trainable_params / total_params * 100:.2f}%)")
 
+    gc_enabled = getattr(model, 'gradient_checkpointing', False)
+    if hasattr(model, 'gradient_checkpointing_enable'):
+        gc_enabled = True
+
+    cache_status = getattr(model.config, 'use_cache', None)
+    if gc_enabled and cache_status:
+        model.config.use_cache = False
+        if is_main_process():
+            logger.info("梯度检查点兼容性处理: 缓存已禁用 (KV缓存与梯度检查点不兼容)")
+    elif gc_enabled and is_main_process():
+        logger.info(f"梯度检查点兼容性检查: 缓存状态={cache_status} (已为正确配置)")
+
     if config.vision_mode:
         dataset = load_vision_data(config.data_path, max_workers=args.max_workers)
     else:
@@ -400,13 +432,6 @@ def main():
 
     if is_main_process():
         logger.info(f"预热: {config.warmup_ratio} ratio -> {warmup_steps} steps")
-
-    if config.vision_mode:
-        training_kwargs["remove_unused_columns"] = False
-        training_kwargs["dataset_text_field"] = ""
-
-    if config.mode == DistributedMode.DDP.value:
-        training_kwargs["ddp_find_unused_parameters"] = False
 
     if config.mode == DistributedMode.FSDP.value:
         fsdp_cfg = config._load_fsdp_config()
@@ -434,7 +459,10 @@ def main():
         trainer_kwargs["dataset_text_field"] = "text"
 
     if config.gpu_monitor:
-        from gpu_monitor import GPUMonitor, GPUMonitorCallback
+        try:
+            from distributed_training.gpu_monitor import GPUMonitor, GPUMonitorCallback
+        except ImportError:
+            from gpu_monitor import GPUMonitor, GPUMonitorCallback
 
         gpu_monitor_inst = GPUMonitor(
             log_dir=config.gpu_log_dir,
