@@ -41,37 +41,41 @@ try:
 except ImportError:
     try:
         from tqdm import tqdm as _tqdm_class
+
         TQDM_AVAILABLE = True
 
         def create_progress_bar(total=None, desc="", unit="it", **kwargs):
             return _tqdm_class(total=total, desc=desc, unit=unit, **kwargs)
+
     except ImportError:
         TQDM_AVAILABLE = False
 
         def create_progress_bar(total=None, desc="", unit="it", **kwargs):
             return None
 
+
 logger = logging.getLogger(__name__)
 
 
 def get_memory_usage() -> dict:
     """获取当前内存使用情况
-    
+
     Returns:
         dict: 包含内存使用信息的字典
     """
     try:
         import psutil
+
         process = psutil.Process(os.getpid())
         mem_info = process.memory_info()
         rss_gb = mem_info.rss / (1024**3)
         vms_gb = mem_info.vms / (1024**3)
-        
+
         system_mem = psutil.virtual_memory()
         total_gb = system_mem.total / (1024**3)
         available_gb = system_mem.available / (1024**3)
         used_percent = system_mem.percent
-        
+
         return {
             "process_rss_gb": round(rss_gb, 2),
             "process_vms_gb": round(vms_gb, 2),
@@ -91,7 +95,7 @@ def get_memory_usage() -> dict:
 
 def print_memory_status(prefix: str = "内存状态") -> None:
     """打印当前内存使用状态
-    
+
     Args:
         prefix: 打印前缀文字
     """
@@ -150,7 +154,7 @@ class MultimodalDataset:
             raise FileNotFoundError(f"数据文件不存在: {data_path}")
 
         self._raw_data = self._load_jsonl()
-        
+
         if self.show_progress:
             print(f"数据加载完成: {len(self._raw_data)} 条记录")
             with_images = sum(1 for d in self._raw_data if d.get("images"))
@@ -185,7 +189,7 @@ class MultimodalDataset:
     @staticmethod
     def _load_image_safe(image_path: str) -> Optional[PILImage.Image]:
         """安全加载单张图片，失败时返回 None
-        
+
         注意: PIL.open() 使用延迟加载，只有访问像素数据时才真正加载
         """
         try:
@@ -215,7 +219,7 @@ class MultimodalDataset:
 
         unique_paths = list(all_paths)
         total_count = len(unique_paths)
-        
+
         if self.show_progress:
             print(f"开始预加载 {total_count} 张图片...")
             print_memory_status("加载前内存")
@@ -242,7 +246,7 @@ class MultimodalDataset:
                     success_count += 1
                 else:
                     fail_count += 1
-                
+
                 if pbar:
                     pbar.update(1)
                     if idx % check_interval == 0 and idx > 0:
@@ -257,7 +261,7 @@ class MultimodalDataset:
         if pbar:
             pbar.close()
             print_memory_status("加载后内存")
-            
+
         loaded_count = len(self._image_cache)
         if loaded_count < total_count:
             msg = f"图片加载完成: {loaded_count}/{total_count} 张成功 ({fail_count}张失败)"
@@ -274,7 +278,7 @@ class MultimodalDataset:
 
     def preload_batch(self, start_idx: int, end_idx: int) -> None:
         """分批预加载指定范围的图片
-        
+
         Args:
             start_idx: 起始样本索引
             end_idx: 结束样本索引 (不含)
@@ -291,7 +295,7 @@ class MultimodalDataset:
 
         path_list = list(paths_to_load)
         batch_count = len(path_list)
-        
+
         desc = f"加载批次[{start_idx}-{end_idx}]"
         if self.show_progress:
             pbar = create_progress_bar(total=batch_count, desc=desc, unit="张")
@@ -313,7 +317,7 @@ class MultimodalDataset:
 
     def clear_cache(self, keep_recent: int = 0) -> None:
         """清理图片缓存以释放内存
-        
+
         Args:
             keep_recent: 保留最近访问的图片数量
         """
@@ -322,14 +326,14 @@ class MultimodalDataset:
             self._image_cache = dict(items[-keep_recent:])
         else:
             self._image_cache.clear()
-        
+
         gc.collect()
         if self.show_progress:
             print_memory_status("缓存清理后")
 
     def _get_pil_image(self, image_path: str) -> Optional[PILImage.Image]:
         """获取单个 PIL 图片对象
-        
+
         根据加载模式决定从缓存读取还是从磁盘加载
         PIL.open() 使用延迟加载，只有访问像素时才真正加载到内存
         """
@@ -352,9 +356,9 @@ class MultimodalDataset:
 
     def __getitem__(self, idx: int) -> dict:
         """按索引获取处理后的单条数据
-        
+
         返回官方格式: 图片嵌入在 messages content 中
-        
+
         Returns:
             {"messages": [...]} (图片在 content 中，无单独 images 列)
         """
@@ -369,49 +373,45 @@ class MultimodalDataset:
 
         return {"messages": processed_messages}
 
-    def _build_messages_with_images(
-        self, 
-        messages: list[dict], 
-        image_paths: list[str]
-    ) -> list[dict]:
+    def _build_messages_with_images(self, messages: list[dict], image_paths: list[str]) -> list[dict]:
         """构建包含图片的 messages（官方格式）
-        
+
         图片直接嵌入在 user content 中，格式为:
         {"type": "image", "image": PIL.Image.Image}
-        
+
         Args:
             messages: 原始消息列表
             image_paths: 图片路径列表
-            
+
         Returns:
             处理后的消息列表（图片嵌入在 content 中）
         """
         processed = []
         image_inserted = False
-        
+
         for msg in messages:
             role = msg.get("role", "")
             content = msg.get("content", [])
-            
+
             if role == "user" and isinstance(content, list):
                 new_content = []
-                
+
                 if not image_inserted and len(image_paths) > 0:
                     for img_path in image_paths:
                         pil_img = self._get_pil_image(img_path)
                         if pil_img is not None:
                             new_content.append({"type": "image", "image": pil_img})
                     image_inserted = True
-                
+
                 for item in content:
                     if item.get("type") == "image":
                         continue
                     new_content.append(item)
-                
+
                 processed.append({"role": role, "content": new_content})
             else:
                 processed.append({"role": role, "content": content})
-        
+
         return processed
 
     def to_conversation_list(
@@ -420,27 +420,27 @@ class MultimodalDataset:
         lazy_load: bool = True,
     ) -> list[dict]:
         """转换为官方格式的 conversation list
-        
+
         这是 Unsloth 官方示例推荐的方式:
         - 返回 Python list of dicts
         - 图片嵌入在 messages content 中
         - 配合 UnslothVisionDataCollator 使用
-        
+
         Args:
             show_memory_stats: 是否显示内存统计信息
             lazy_load: 是否延迟加载图片（只在训练时加载）
-            
+
         Returns:
             list of dicts，格式为 [{"messages": [...]}]
         """
         total = len(self)
-        
+
         if show_memory_stats and self.show_progress:
             print_memory_status("转换前内存")
             print(f"开始转换 {total} 条数据为 conversation list...")
-        
+
         result = []
-        
+
         if self.show_progress:
             pbar = create_progress_bar(
                 total=total,
@@ -479,14 +479,14 @@ class MultimodalDataset:
         show_memory_stats: bool = True,
     ) -> Dataset:
         """转换为 HuggingFace Dataset
-        
+
         使用官方格式：图片嵌入在 messages content 中
         不再使用单独的 images 列，避免内存暴涨
-        
+
         Args:
             remove_metadata: 是否移除 metadata 列 (训练不需要)
             show_memory_stats: 是否显示内存统计信息
-            
+
         Returns:
             HuggingFace Dataset 对象
         """
@@ -497,7 +497,7 @@ class MultimodalDataset:
             print(f"开始转换 {total} 条数据...")
 
         all_messages = []
-        
+
         if self.show_progress:
             pbar = create_progress_bar(
                 total=total,
@@ -543,7 +543,7 @@ class MultimodalDataset:
         show_memory_stats: bool = True,
     ) -> Dataset:
         """分批转换为 HuggingFace Dataset，控制内存占用
-        
+
         分批处理数据，每批处理后可选清理缓存，
         最后合并所有批次为完整的 Dataset。
 
@@ -558,7 +558,7 @@ class MultimodalDataset:
         """
         total = len(self)
         num_batches = (total + batch_size - 1) // batch_size
-        
+
         if show_memory_stats and self.show_progress:
             print_memory_status("分批转换前内存")
             print(f"分批转换配置: 总样本={total}, 批次大小={batch_size}, 批次数={num_batches}")
@@ -577,16 +577,16 @@ class MultimodalDataset:
         for batch_idx in range(num_batches):
             start = batch_idx * batch_size
             end = min(start + batch_size, total)
-            
+
             if self.image_load_mode == "batch":
                 self.preload_batch(start, end)
 
             batch_messages = []
-            
+
             for i in range(start, end):
                 item = self[i]
                 batch_messages.append(item["messages"])
-            
+
             all_messages.extend(batch_messages)
 
             if clear_cache_between_batches:
@@ -638,11 +638,11 @@ class MultimodalDataset:
             "image_load_mode": self.image_load_mode,
             "unique_image_paths": len({p for d in self._raw_data for p in d.get("images", [])}),
         }
-        
+
         mem = get_memory_usage()
         stats_dict["memory_rss_gb"] = mem["process_rss_gb"]
         stats_dict["memory_available_gb"] = mem["system_available_gb"]
-        
+
         return stats_dict
 
 
@@ -711,7 +711,7 @@ def create_vision_dataset(
         show_progress=show_progress,
         batch_size=batch_size if use_batched else None,
     )
-    
+
     if return_list:
         return mm_ds.to_conversation_list()
     elif use_batched:

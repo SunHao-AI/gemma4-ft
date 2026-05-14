@@ -8,11 +8,11 @@
 # 【重要】请根据您的实际环境修改以下路径配置
 
 # 方式1: 使用HuggingFace在线模型
-MODEL_NAME="unsloth/gemma-4-E4B-it-bnb-4bit"
+# MODEL_NAME="unsloth/gemma-4-E4B-it-bnb-4bit"
 # 方式2: 使用本地模型路径
-# MODEL_NAME="/raid5/sh/model/unsloth/gemma-4-E4B-it-unsloth-bnb-4bit"
+MODEL_NAME="/raid5/sh/model/unsloth/gemma-4-E4B-it-unsloth-bnb-4bit"
 
-DATA_PATH="./unsloth_train_data.jsonl"
+DATA_PATH="data/processed/unsloth_training_data-wgang_40/train.jsonl"
 OUTPUT_DIR="./outputs/gemma4_e4b_lora"
 
 MAX_SEQ_LENGTH=2048

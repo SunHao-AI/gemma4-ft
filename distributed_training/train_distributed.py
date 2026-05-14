@@ -406,11 +406,11 @@ def main():
         total_params = sum(p.numel() for p in model.parameters())
         logger.info(f"可训练参数: {trainable_params:,} ({trainable_params / total_params * 100:.2f}%)")
 
-    gc_enabled = getattr(model, 'gradient_checkpointing', False)
-    if hasattr(model, 'gradient_checkpointing_enable'):
+    gc_enabled = getattr(model, "gradient_checkpointing", False)
+    if hasattr(model, "gradient_checkpointing_enable"):
         gc_enabled = True
 
-    cache_status = getattr(model.config, 'use_cache', None)
+    cache_status = getattr(model.config, "use_cache", None)
     if gc_enabled and cache_status:
         model.config.use_cache = False
         if is_main_process():
