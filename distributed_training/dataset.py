@@ -132,6 +132,7 @@ class MultimodalDataset:
         max_workers: int = 8,
         show_progress: bool = True,
         batch_size: Optional[int] = None,
+        image_size: Optional[tuple[int, int]] = None,
     ):
         """
         Args:
@@ -140,12 +141,14 @@ class MultimodalDataset:
             max_workers: 预加载模式下的线程池大小
             show_progress: 是否显示进度条
             batch_size: 分批加载时的批次大小 (仅 batch 模式有效)
+            image_size: 训练前统一重采样尺寸 (width, height), None表示保持原图
         """
         self.data_path = Path(data_path)
         self.image_load_mode = image_load_mode
         self.max_workers = max_workers
         self.show_progress = show_progress and TQDM_AVAILABLE
         self.batch_size = batch_size
+        self.image_size = self._normalize_image_size(image_size)
         self._raw_data: list[dict] = []
         self._image_cache: dict[str, PILImage.Image] = {}
         self._loaded_indices: set[int] = set()
@@ -159,6 +162,8 @@ class MultimodalDataset:
             print(f"数据加载完成: {len(self._raw_data)} 条记录")
             with_images = sum(1 for d in self._raw_data if d.get("images"))
             print(f"含图片样本: {with_images} 条")
+            if self.image_size is not None:
+                print(f"训练图片尺寸: {self.image_size[0]}x{self.image_size[1]}")
         else:
             logger.info("数据加载完成: %d 条记录, %d 条含图片", len(self._raw_data), sum(1 for d in self._raw_data if d.get("images")))
 
@@ -187,7 +192,26 @@ class MultimodalDataset:
         return any(len(sample.get("images", [])) > 0 for sample in self._raw_data)
 
     @staticmethod
-    def _load_image_safe(image_path: str) -> Optional[PILImage.Image]:
+    def _normalize_image_size(image_size: Optional[tuple[int, int]]) -> Optional[tuple[int, int]]:
+        """标准化图片尺寸配置"""
+        if image_size is None:
+            return None
+        if len(image_size) != 2:
+            raise ValueError(f"image_size必须为(width, height), 当前: {image_size}")
+        width, height = int(image_size[0]), int(image_size[1])
+        if width <= 0 or height <= 0:
+            raise ValueError(f"image_size必须为正整数, 当前: {image_size}")
+        return width, height
+
+    @staticmethod
+    def _get_resize_resample():
+        """兼容不同 Pillow 版本的重采样枚举"""
+        resampling = getattr(PILImage, "Resampling", None)
+        if resampling is not None:
+            return resampling.LANCZOS
+        return PILImage.LANCZOS
+
+    def _load_image_safe(self, image_path: str) -> Optional[PILImage.Image]:
         """安全加载单张图片，失败时返回 None
 
         注意: PIL.open() 使用延迟加载，只有访问像素数据时才真正加载
@@ -196,6 +220,8 @@ class MultimodalDataset:
             img = PILImage.open(image_path)
             if img.mode != "RGB":
                 img = img.convert("RGB")
+            if self.image_size is not None and img.size != self.image_size:
+                img = img.resize(self.image_size, resample=self._get_resize_resample())
             return img
         except Exception as e:
             logger.warning("图片加载失败: %s, 错误: %s", image_path, e)
@@ -637,6 +663,7 @@ class MultimodalDataset:
             "cached_images": cache_size,
             "image_load_mode": self.image_load_mode,
             "unique_image_paths": len({p for d in self._raw_data for p in d.get("images", [])}),
+            "configured_image_size": self.image_size,
         }
 
         mem = get_memory_usage()
@@ -652,6 +679,7 @@ def create_multimodal_dataset(
     max_workers: int = 8,
     show_progress: bool = True,
     batch_size: Optional[int] = None,
+    image_size: Optional[tuple[int, int]] = None,
 ) -> MultimodalDataset:
     """便捷函数: 创建多模态数据集
 
@@ -661,6 +689,7 @@ def create_multimodal_dataset(
         max_workers: 程池大小 (仅 preload/batch 模式)
         show_progress: 是否显示进度条
         batch_size: 分批加载时的批次大小 (仅 batch 模式)
+        image_size: 训练前统一重采样尺寸 (width, height)
 
     Returns:
         MultimodalDataset 宝例
@@ -671,6 +700,7 @@ def create_multimodal_dataset(
         max_workers=max_workers,
         show_progress=show_progress,
         batch_size=batch_size,
+        image_size=image_size,
     )
 
 
@@ -681,6 +711,7 @@ def create_vision_dataset(
     use_batched: bool = False,
     batch_size: int = 500,
     return_list: bool = True,
+    image_size: Optional[tuple[int, int]] = None,
 ) -> Union[list[dict], Dataset]:
     """便捷函数: 创建视觉微调数据集
 
@@ -700,6 +731,7 @@ def create_vision_dataset(
         use_batched: 是否使用分批处理模式 (推荐大数据集)
         batch_size: 分批处理时的批次大小
         return_list: 是否返回 Python list (官方推荐) 而非 HuggingFace Dataset
+        image_size: 训练前统一重采样尺寸 (width, height)
 
     Returns:
         处理完成的数据集（list 或 Dataset）
@@ -710,6 +742,7 @@ def create_vision_dataset(
         max_workers=max_workers,
         show_progress=show_progress,
         batch_size=batch_size if use_batched else None,
+        image_size=image_size,
     )
 
     if return_list:

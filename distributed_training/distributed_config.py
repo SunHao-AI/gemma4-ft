@@ -122,6 +122,17 @@ class DistributedConfig:
     bf16: bool = True
     fp16: bool = False
     vision_mode: bool = True
+    tf32: bool = True
+    dataloader_num_workers: Optional[int] = None
+    dataloader_prefetch_factor: Optional[int] = None
+    dataloader_pin_memory: bool = True
+    dataloader_persistent_workers: bool = True
+    dataloader_drop_last: bool = False
+    ddp_find_unused_parameters: bool = False
+    cpu_threads_per_rank: Optional[int] = None
+    image_load_mode: str = "lazy"
+    image_batch_size: Optional[int] = None
+    materialize_vision_dataset: bool = False
 
     logging_steps: int = 10
     save_steps: int = 300
@@ -215,6 +226,21 @@ class DistributedConfig:
             raise ValueError(
                 f"lr_scaling必须是{lr_values}之一, 当前: {self.lr_scaling}"
             )
+
+        valid_image_load_modes = {"preload", "lazy", "batch"}
+        if self.image_load_mode not in valid_image_load_modes:
+            raise ValueError(
+                f"image_load_mode必须是{valid_image_load_modes}之一, 当前: {self.image_load_mode}"
+            )
+
+        if self.dataloader_num_workers is not None and self.dataloader_num_workers < 0:
+            raise ValueError("dataloader_num_workers必须>=0")
+
+        if self.dataloader_prefetch_factor is not None and self.dataloader_prefetch_factor < 1:
+            raise ValueError("dataloader_prefetch_factor必须>=1")
+
+        if self.cpu_threads_per_rank is not None and self.cpu_threads_per_rank < 1:
+            raise ValueError("cpu_threads_per_rank必须>=1")
 
     def _resolve_mode(self):
         is_distributed_env = os.environ.get("LOCAL_RANK") is not None
@@ -446,6 +472,23 @@ class DistributedConfig:
             args.append("--vision_mode")
         if self.load_in_4bit:
             args.append("--load_in_4bit")
+        if self.tf32:
+            args.append("--tf32")
+        if self.dataloader_num_workers is not None:
+            args.append(f"--dataloader_num_workers {self.dataloader_num_workers}")
+        if self.dataloader_prefetch_factor is not None:
+            args.append(f"--dataloader_prefetch_factor {self.dataloader_prefetch_factor}")
+        if self.dataloader_pin_memory:
+            args.append("--dataloader_pin_memory")
+        if self.dataloader_persistent_workers:
+            args.append("--dataloader_persistent_workers")
+        if self.cpu_threads_per_rank is not None:
+            args.append(f"--cpu_threads_per_rank {self.cpu_threads_per_rank}")
+        args.append(f"--image_load_mode {self.image_load_mode}")
+        if self.image_batch_size is not None:
+            args.append(f"--image_batch_size {self.image_batch_size}")
+        if self.materialize_vision_dataset:
+            args.append("--materialize_vision_dataset")
         if self.gpu_monitor:
             args.append("--gpu_monitor")
             args.append(f"--gpu_log_dir {self.gpu_log_dir}")
@@ -487,14 +530,23 @@ class DistributedConfig:
             "max_seq_length": self.max_seq_length,
             "packing": False,
             "report_to": "none",
+            "dataloader_pin_memory": self.dataloader_pin_memory,
+            "dataloader_drop_last": self.dataloader_drop_last,
         }
 
         if self.vision_mode:
             kwargs["remove_unused_columns"] = False
             kwargs["dataset_text_field"] = ""
 
+        if self.dataloader_num_workers is not None:
+            kwargs["dataloader_num_workers"] = self.dataloader_num_workers
+            if self.dataloader_num_workers > 0:
+                kwargs["dataloader_persistent_workers"] = self.dataloader_persistent_workers
+                if self.dataloader_prefetch_factor is not None:
+                    kwargs["dataloader_prefetch_factor"] = self.dataloader_prefetch_factor
+
         if self.mode == "ddp":
-            kwargs["ddp_find_unused_parameters"] = True
+            kwargs["ddp_find_unused_parameters"] = self.ddp_find_unused_parameters
 
         if self.mode == "fsdp":
             fsdp_cfg = self._load_fsdp_config()
@@ -583,6 +635,12 @@ class DistributedConfig:
         lines.append(f"  混合精度: {'BF16' if self.bf16 else 'FP16' if self.fp16 else 'FP32'}")
         lines.append(f"  优化器: {self.optim}")
         lines.append(f"  LoRA: r={self.lora_r}, alpha={self.lora_alpha}")
+        lines.append(f"  TF32: {self.tf32}")
+        lines.append(f"  DataLoader workers: {self.dataloader_num_workers if self.dataloader_num_workers is not None else 'auto'}")
+        lines.append(f"  Prefetch factor: {self.dataloader_prefetch_factor if self.dataloader_prefetch_factor is not None else 'auto'}")
+        lines.append(f"  CPU线程/Rank: {self.cpu_threads_per_rank if self.cpu_threads_per_rank is not None else 'auto'}")
+        lines.append(f"  图片加载模式: {self.image_load_mode}")
+        lines.append(f"  数据集预物化: {self.materialize_vision_dataset}")
 
         lines.append("")
         lines.append("硬件配置:")
@@ -624,10 +682,20 @@ class DistributedConfig:
             "gpus_per_model": self.gpus_per_model,
             "bf16": self.bf16,
             "vision_mode": self.vision_mode,
+            "tf32": self.tf32,
             "load_in_4bit": self.load_in_4bit,
             "lora_r": self.lora_r,
             "lora_alpha": self.lora_alpha,
             "optim": self.optim,
+            "dataloader_num_workers": self.dataloader_num_workers,
+            "dataloader_prefetch_factor": self.dataloader_prefetch_factor,
+            "dataloader_pin_memory": self.dataloader_pin_memory,
+            "dataloader_persistent_workers": self.dataloader_persistent_workers,
+            "ddp_find_unused_parameters": self.ddp_find_unused_parameters,
+            "cpu_threads_per_rank": self.cpu_threads_per_rank,
+            "image_load_mode": self.image_load_mode,
+            "image_batch_size": self.image_batch_size,
+            "materialize_vision_dataset": self.materialize_vision_dataset,
             "max_seq_length": self.max_seq_length,
             "num_epochs": self.num_epochs,
             "model_name": self.model_name,

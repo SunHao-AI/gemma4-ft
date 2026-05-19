@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Optional, Set, List, Dict, Any
 from datetime import datetime
 
+from gemma4_core.runtime import DEFAULT_LOG_DATE_FORMAT, DEFAULT_LOG_FORMAT, build_logging_formatter
+
 IN_NOTEBOOK = False
 TQDM_AVAILABLE = False
 tqdm = None
@@ -70,8 +72,8 @@ except ImportError:
 
 SUPPORTED_IMAGE_EXTENSIONS: Set[str] = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tif", ".tiff", ".webp"}
 
-LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
-LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+LOG_FORMAT = DEFAULT_LOG_FORMAT
+LOG_DATE_FORMAT = DEFAULT_LOG_DATE_FORMAT
 
 
 def setup_progress_logging(
@@ -102,7 +104,7 @@ def setup_progress_logging(
     if logger.handlers:
         logger.handlers.clear()
 
-    formatter = logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
+    formatter = build_logging_formatter(LOG_FORMAT, LOG_DATE_FORMAT)
 
     if not use_tqdm:
         console_handler = logging.StreamHandler()
@@ -172,11 +174,12 @@ def create_progress_bar(
                 **kwargs,
             )
         else:
+            kwargs.setdefault("position", 0)
+            kwargs.setdefault("dynamic_ncols", True)
             return tqdm(
                 total=total,
                 desc=desc,
                 unit=unit,
-                position=0,
                 leave=True,
                 mininterval=mininterval,
                 maxinterval=maxinterval,

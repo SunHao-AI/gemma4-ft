@@ -185,6 +185,15 @@ class TestDistributedConfigValidation:
         with pytest.raises(ValueError, match="lr_scaling必须是"):
             DistributedConfig(mode="single_gpu", gpu_ids=[0], lr_scaling="invalid")
 
+    def test_invalid_image_load_mode(self):
+        _set_gpu_count(1)
+        with pytest.raises(ValueError, match="image_load_mode必须是"):
+            DistributedConfig(
+                mode="single_gpu",
+                gpu_ids=[0],
+                image_load_mode="invalid",
+            )
+
     def test_gpu_groups_overlap(self):
         _set_gpu_count(4)
         with pytest.raises(ValueError, match="重叠GPU"):
@@ -463,7 +472,24 @@ class TestDistributedConfigTrainingKwargs:
         config = DistributedConfig(mode="ddp", gpu_ids=[0, 1])
         _set_bf16_supported(True)
         kwargs = config.get_training_kwargs()
-        assert kwargs["ddp_find_unused_parameters"] is True
+        assert kwargs["ddp_find_unused_parameters"] is False
+
+    def test_dataloader_kwargs(self):
+        _set_gpu_count(1)
+        config = DistributedConfig(
+            mode="single_gpu",
+            gpu_ids=[0],
+            dataloader_num_workers=6,
+            dataloader_prefetch_factor=4,
+            dataloader_pin_memory=True,
+            dataloader_persistent_workers=True,
+        )
+        _set_bf16_supported(True)
+        kwargs = config.get_training_kwargs()
+        assert kwargs["dataloader_num_workers"] == 6
+        assert kwargs["dataloader_prefetch_factor"] == 4
+        assert kwargs["dataloader_pin_memory"] is True
+        assert kwargs["dataloader_persistent_workers"] is True
 
     def test_vision_mode_kwargs(self):
         _set_gpu_count(1)
@@ -588,6 +614,23 @@ class TestDistributedConfigTorchrunCommand:
         cmd = config.get_torchrun_command()
         assert "--use_ddp" in cmd
         assert "--device_map" in cmd
+
+    def test_command_contains_runtime_tuning_args(self):
+        _set_gpu_count(2)
+        config = DistributedConfig(
+            mode="ddp",
+            gpu_ids=[0, 1],
+            dataloader_num_workers=8,
+            dataloader_prefetch_factor=4,
+            cpu_threads_per_rank=6,
+            tf32=True,
+            image_load_mode="lazy",
+        )
+        cmd = config.get_torchrun_command()
+        assert "--dataloader_num_workers 8" in cmd
+        assert "--dataloader_prefetch_factor 4" in cmd
+        assert "--cpu_threads_per_rank 6" in cmd
+        assert "--tf32" in cmd
 
 
 # ============================================================

@@ -15,12 +15,13 @@ import json
 import logging
 import os
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 import torch
 from transformers import TrainerCallback
+
+from gemma4_core.runtime import format_file_timestamp, get_aware_now
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +56,9 @@ class GPUMonitor:
 
         if self._is_main:
             self.log_dir.mkdir(parents=True, exist_ok=True)
-            self._csv_path = self.log_dir / f"gpu_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-            self._summary_path = self.log_dir / f"gpu_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            timestamp = format_file_timestamp()
+            self._csv_path = self.log_dir / f"gpu_log_{timestamp}.csv"
+            self._summary_path = self.log_dir / f"gpu_summary_{timestamp}.json"
             self._init_csv()
             logger.info(f"GPU监控已启动, 日志目录: {self.log_dir}")
 
@@ -98,7 +100,7 @@ class GPUMonitor:
         nvidia_stats = self._get_nvidia_smi_stats() if self._is_main else {}
 
         record = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": get_aware_now().isoformat(),
             "step": step if step >= 0 else self._step_count,
             "elapsed_sec": round(elapsed, 2),
         }

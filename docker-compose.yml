@@ -1,0 +1,27 @@
+services:
+  gemma4:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: gemma4-ft:cu128-fa2
+    container_name: gemma4-ft
+    working_dir: /workspace
+    gpus: all
+    ipc: host
+    shm_size: "64gb"
+    stdin_open: true
+    tty: true
+    environment:
+      CONDA_ENV: gemma4
+      CUDA_HOME: /usr/local/cuda
+      HF_HOME: /workspace/.cache/huggingface
+      PIP_CACHE_DIR: /workspace/.cache/pip
+      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True,max_split_size_mb:256
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    volumes:
+      - .:/workspace
+      - ./docker-cache/huggingface:/workspace/.cache/huggingface
+      - ./docker-cache/pip:/workspace/.cache/pip
+      - ./docker-cache/conda-pkgs:/opt/conda/pkgs
+      - ./output:/workspace/output
