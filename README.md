@@ -1,4 +1,4 @@
-﻿## gemma4-ft
+﻿## unsloth-finetune
 
 面向 Gemma4 多模态微调与评估的应用型 ML 工程仓库。
 
@@ -14,7 +14,7 @@
 ### 目录总览
 
 ```text
-gemma4-ft/
+unsloth-finetune/
 ├── src/unsloth_finetune/
 │   ├── core/                    # 运行时基础设施
 │   ├── data/labelme/            # LabelMe 数据处理与转换
@@ -41,8 +41,8 @@ gemma4-ft/
 
 ```bash
 pip install -e ".[finetune,data,monitor,dev]"
-gemma4-train --help
-gemma4-infer --help
+unsloth-train --help
+unsloth-infer --help
 ```
 
 ### 架构原则

@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "gemma4-ft"
+name = "unsloth-finetune"
 version = "0.1.0"
 description = "Gemma 4 多模态微调项目：分布式训练工具包与数据处理流水线"
 readme = "README.md"
@@ -49,10 +49,10 @@ dev = [
 ]
 
 [project.scripts]
-gemma4-train = "unsloth_finetune.training.distributed.train_distributed:main"
-gemma4-infer = "unsloth_finetune.training.distributed.distributed_inference:main"
-gemma4-check-flash-attention = "unsloth_finetune.training.distributed.check_flash_attention_env:main"
-gemma4-compare-runs = "unsloth_finetune.training.distributed.compare_training_runs:main"
+unsloth-train = "unsloth_finetune.training.distributed.train_distributed:main"
+unsloth-infer = "unsloth_finetune.training.distributed.distributed_inference:main"
+unsloth-check-flash-attention = "unsloth_finetune.training.distributed.check_flash_attention_env:main"
+unsloth-compare-runs = "unsloth_finetune.training.distributed.compare_training_runs:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

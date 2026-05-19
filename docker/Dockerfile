@@ -3,7 +3,7 @@ FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Asia/Shanghai
 ENV CONDA_DIR=/opt/conda
-ENV CONDA_ENV=gemma4
+ENV CONDA_ENV=unsloth-finetune
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=/usr/local/cuda/bin:/opt/conda/bin:$PATH
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
@@ -68,13 +68,13 @@ PY
 
 RUN rm -rf /opt/project/.git /opt/project/.pytest_cache /opt/project/__pycache__
 
-COPY docker/entrypoint.sh /usr/local/bin/gemma4-entrypoint.sh
-COPY docker/run_train.sh /usr/local/bin/gemma4-train.sh
-COPY docker/run_infer.sh /usr/local/bin/gemma4-infer.sh
+COPY docker/entrypoint.sh /usr/local/bin/unsloth-entrypoint.sh
+COPY docker/run_train.sh /usr/local/bin/unsloth-train.sh
+COPY docker/run_infer.sh /usr/local/bin/unsloth-infer.sh
 
-RUN chmod +x /usr/local/bin/gemma4-entrypoint.sh /usr/local/bin/gemma4-train.sh /usr/local/bin/gemma4-infer.sh
+RUN chmod +x /usr/local/bin/unsloth-entrypoint.sh /usr/local/bin/unsloth-train.sh /usr/local/bin/unsloth-infer.sh
 
 WORKDIR /workspace
 
-ENTRYPOINT ["/usr/local/bin/gemma4-entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/unsloth-entrypoint.sh"]
 CMD ["/bin/bash"]

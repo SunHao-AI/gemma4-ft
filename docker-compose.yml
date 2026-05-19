@@ -1,10 +1,10 @@
 services:
-  gemma4:
+  unsloth:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    image: gemma4-ft:cu128-fa2
-    container_name: gemma4-ft
+    image: unsloth-finetune:cu128-fa2
+    container_name: unsloth-finetune
     working_dir: /workspace
     gpus: all
     ipc: host
@@ -12,7 +12,7 @@ services:
     stdin_open: true
     tty: true
     environment:
-      CONDA_ENV: gemma4
+      CONDA_ENV: unsloth-finetune
       CUDA_HOME: /usr/local/cuda
       HF_HOME: /workspace/.cache/huggingface
       PIP_CACHE_DIR: /workspace/.cache/pip

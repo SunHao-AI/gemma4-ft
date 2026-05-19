@@ -1,8 +1,9 @@
-version = 1
+﻿version = 1
 revision = 3
 requires-python = ">=3.13"
 
 [[package]]
-name = "gemma4-ft"
+name = "unsloth-finetune"
 version = "0.1.0"
 source = { virtual = "." }
+

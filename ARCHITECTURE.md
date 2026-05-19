@@ -1,8 +1,8 @@
-﻿# gemma4-ft 项目架构文档
+# unsloth-finetune 项目架构文档
 
 ## 项目定位
 
-`gemma4-ft` 采用应用型 ML 工程仓库结构，服务于以下场景：
+`unsloth-finetune` 采用应用型 ML 工程仓库结构，服务于以下场景：
 
 - LabelMe 数据清洗、统计、采样与格式转换
 - Gemma4 / Unsloth 多模态训练与分布式推理
@@ -14,7 +14,7 @@
 ## 目录结构
 
 ```text
-gemma4-ft/
+unsloth-finetune/
 ├── src/unsloth_finetune/
 │   ├── core/                         # 运行时基础设施与项目自举
 │   ├── data/
@@ -103,10 +103,10 @@ unsloth_finetune.tools.color_contrast
 
 安装项目后，也可使用 console scripts：
 
-- `gemma4-train`
-- `gemma4-infer`
-- `gemma4-check-flash-attention`
-- `gemma4-compare-runs`
+- `unsloth-train`
+- `unsloth-infer`
+- `unsloth-check-flash-attention`
+- `unsloth-compare-runs`
 
 ## 兼容策略
 

@@ -104,13 +104,13 @@ docker compose build --progress=plain
 如果只想用原生命令：
 
 ```bash
-docker build -f docker/Dockerfile -t gemma4-ft:cu128-fa2 .
+docker build -f docker/Dockerfile -t unsloth-finetune:cu128-fa2 .
 ```
 
 ## 7. 启动交互式容器
 
 ```bash
-docker compose run --rm gemma4
+docker compose run --rm unsloth
 ```
 
 或者：
@@ -125,10 +125,10 @@ docker run --rm -it \
   -v $(pwd)/docker-cache/pip:/workspace/.cache/pip \
   -v $(pwd)/docker-cache/conda-pkgs:/opt/conda/pkgs \
   -v $(pwd)/output:/workspace/output \
-  gemma4-ft:cu128-fa2
+  unsloth-finetune:cu128-fa2
 ```
 
-进入容器后，默认会自动激活 `gemma4` conda 环境。
+进入容器后，默认会自动激活 `unsloth-finetune` conda 环境。
 
 ## 8. 容器内环境验证
 
@@ -177,8 +177,8 @@ cat flash_attention_env_report.json
 
 默认脚本路径：
 
-- `gemma4-train.sh`
-- `gemma4-infer.sh`
+- `unsloth-train.sh`
+- `unsloth-infer.sh`
 
 示例：
 
@@ -194,13 +194,13 @@ NUM_EPOCHS=1 \
 LEARNING_RATE=2e-4 \
 IMAGE_WIDTH=512 \
 IMAGE_HEIGHT=512 \
-gemma4-train.sh
+unsloth-train.sh
 ```
 
 如果需要附加额外参数，可通过 `EXTRA_ARGS` 传入：
 
 ```bash
-EXTRA_ARGS="--save_total_limit 3 --warmup_ratio 0.03 --benchmark" gemma4-train.sh
+EXTRA_ARGS="--save_total_limit 3 --warmup_ratio 0.03 --benchmark" unsloth-train.sh
 ```
 
 ### 9.2 直接调用训练脚本
@@ -240,7 +240,7 @@ INPUT_PATH=/workspace/data/infer.json \
 OUTPUT_PATH=/workspace/output/infer_result.json \
 GPU_IDS=0,1,2,3,4,5,6,7 \
 NPROC_PER_NODE=8 \
-gemma4-infer.sh
+unsloth-infer.sh
 ```
 
 ### 10.2 直接调用分布式推理脚本
@@ -271,7 +271,7 @@ docker run --rm -it \
   --shm-size=64g \
   -p 8888:8888 \
   -v $(pwd):/workspace \
-  gemma4-ft:cu128-fa2
+  unsloth-finetune:cu128-fa2
 ```
 
 然后在浏览器中访问宿主机的 `8888` 端口。
@@ -323,4 +323,5 @@ docker-cache/
 5. 在容器中执行 `nvcc --version` 与 Python 依赖导入检查
 6. 运行 `python distributed_training/check_flash_attention_env.py`
 7. 先进行一轮短程训练验证，再正式启动全量训练
+
 

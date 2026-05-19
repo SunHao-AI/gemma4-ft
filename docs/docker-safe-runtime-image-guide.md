@@ -70,19 +70,19 @@ docker ps -a --format 'table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Image}}'
 删除刚刚试验过的相关容器：
 
 ```bash
-docker rm -f gemma4-base gemma4-ft fa2-build-safe gemma4-installer gemma4-runtime 2>/dev/null || true
+docker rm -f unsloth-base unsloth-finetune fa2-build-safe unsloth-installer unsloth-runtime 2>/dev/null || true
 ```
 
 如果你不知道容器名，也可以只根据镜像筛选：
 
 ```bash
-docker ps -a --filter "ancestor=gemma4-base:cu128" --format '{{.ID}} {{.Names}}'
+docker ps -a --filter "ancestor=unsloth-base:cu128" --format '{{.ID}} {{.Names}}'
 ```
 
 如需一并删除旧镜像：
 
 ```bash
-docker rmi -f gemma4-base:cu128 gemma4-ft:cu128-fa2 gemma4-safe-base:cu128 gemma4-runtime:cu128-fa2 2>/dev/null || true
+docker rmi -f unsloth-base:cu128 unsloth-finetune:cu128-fa2 unsloth-safe-base:cu128 unsloth-runtime:cu128-fa2 2>/dev/null || true
 ```
 
 ## 4. 创建一个全新的干净目录
@@ -135,7 +135,7 @@ cat > ${FLASH_ATTN_SAFE_HOME}/context/entrypoint.sh <<'EOF'
 set -euo pipefail
 
 CONDA_DIR="${CONDA_DIR:-/opt/conda}"
-CONDA_ENV="${CONDA_ENV:-gemma4}"
+CONDA_ENV="${CONDA_ENV:-unsloth-finetune}"
 CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
 
 export PATH="${CUDA_HOME}/bin:${CONDA_DIR}/bin:${PATH}"
@@ -172,7 +172,7 @@ FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Asia/Shanghai
 ENV CONDA_DIR=/opt/conda
-ENV CONDA_ENV=gemma4
+ENV CONDA_ENV=unsloth-finetune
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=/usr/local/cuda/bin:/opt/conda/bin:$PATH
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
@@ -218,12 +218,12 @@ RUN conda config --system --set auto_activate_base false && \
     conda create -y -n ${CONDA_ENV} python=3.11 && \
     conda clean -afy
 
-COPY entrypoint.sh /usr/local/bin/gemma4-entrypoint.sh
-RUN chmod +x /usr/local/bin/gemma4-entrypoint.sh
+COPY entrypoint.sh /usr/local/bin/unsloth-entrypoint.sh
+RUN chmod +x /usr/local/bin/unsloth-entrypoint.sh
 
 WORKDIR /workspace_repo
 
-ENTRYPOINT ["/usr/local/bin/gemma4-entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/unsloth-entrypoint.sh"]
 CMD ["/bin/bash"]
 EOF
 ```
@@ -232,13 +232,13 @@ EOF
 
 ```bash
 cd ${FLASH_ATTN_SAFE_HOME}/context
-docker build -t gemma4-safe-base:cu128 .
+docker build -t unsloth-safe-base:cu128 .
 ```
 
 构建成功后可查看：
 
 ```bash
-docker images | grep gemma4-safe-base
+docker images | grep unsloth-safe-base
 ```
 
 ## 7. 启动“半数资源上限”的受限安装容器
@@ -251,7 +251,7 @@ docker images | grep gemma4-safe-base
 
 ```bash
 docker run -it \
-  --name gemma4-installer \
+  --name unsloth-installer \
   --gpus '"device=0,1,2,3"' \
   --cpus=64 \
   --memory=120g \
@@ -274,12 +274,12 @@ docker run -it \
   -v ${FLASH_ATTN_SAFE_HOME}/wheels:/opt/wheels \
   -v ${FLASH_ATTN_SAFE_HOME}/output:/opt/output \
   -v ${FLASH_ATTN_SAFE_HOME}/tmp:/opt/tmp \
-  gemma4-safe-base:cu128
+  unsloth-safe-base:cu128
 ```
 
 ## 8. 容器内安装 conda 环境依赖
 
-以下命令都在 `gemma4-installer` 容器内部执行。
+以下命令都在 `unsloth-installer` 容器内部执行。
 
 ### 8.1 基础检查
 
@@ -294,7 +294,7 @@ nvidia-smi
 
 预期：
 
-- `python` 路径位于 `/opt/conda/envs/gemma4/bin/python`
+- `python` 路径位于 `/opt/conda/envs/unsloth-finetune/bin/python`
 - `nvcc` 路径位于 `/usr/local/cuda/bin/nvcc`
 
 ### 8.2 安装 PyTorch 与项目依赖
@@ -387,14 +387,14 @@ exit
 回到宿主机后执行：
 
 ```bash
-docker commit gemma4-installer gemma4-runtime:cu128-fa2
-docker images | grep gemma4-runtime
+docker commit unsloth-installer unsloth-runtime:cu128-fa2
+docker images | grep unsloth-runtime
 ```
 
 如果镜像已生成，可删除安装容器：
 
 ```bash
-docker rm -f gemma4-installer
+docker rm -f unsloth-installer
 ```
 
 ## 10. 后续如何启动这个镜像
@@ -405,7 +405,7 @@ docker rm -f gemma4-installer
 
 ```bash
 docker run -it \
-  --name gemma4-dev \
+  --name unsloth-dev \
   --gpus '"device=0,1,2,3"' \
   --cpus=64 \
   --memory=120g \
@@ -420,7 +420,7 @@ docker run -it \
   -v ${FLASH_ATTN_SAFE_HOME}/cache/huggingface:/opt/cache/huggingface \
   -v ${FLASH_ATTN_SAFE_HOME}/cache/pip:/opt/cache/pip \
   -v ${FLASH_ATTN_SAFE_HOME}/output:/opt/output \
-  gemma4-runtime:cu128-fa2
+  unsloth-runtime:cu128-fa2
 ```
 
 ### 10.2 退出、停止、重启、进入容器
@@ -434,25 +434,25 @@ exit
 在宿主机停止容器：
 
 ```bash
-docker stop gemma4-dev
+docker stop unsloth-dev
 ```
 
 重新启动容器：
 
 ```bash
-docker start gemma4-dev
+docker start unsloth-dev
 ```
 
 再次进入容器：
 
 ```bash
-docker exec -it gemma4-dev bash
+docker exec -it unsloth-dev bash
 ```
 
 删除容器：
 
 ```bash
-docker rm -f gemma4-dev
+docker rm -f unsloth-dev
 ```
 
 ## 11. 使用该镜像执行微调任务
@@ -465,7 +465,7 @@ docker rm -f gemma4-dev
 
 ```bash
 docker run -d \
-  --name gemma4-train \
+  --name unsloth-train \
   --gpus all \
   --cpus=64 \
   --memory=120g \
@@ -481,19 +481,19 @@ docker run -d \
   -v ${FLASH_ATTN_SAFE_HOME}/cache/huggingface:/opt/cache/huggingface \
   -v ${FLASH_ATTN_SAFE_HOME}/output:/opt/output \
   -w /workspace_repo \
-  gemma4-runtime:cu128-fa2 \
+  unsloth-runtime:cu128-fa2 \
   tail -f /dev/null
 ```
 
 进入训练容器：
 
 ```bash
-docker exec -it gemma4-train bash
+docker exec -it unsloth-train bash
 ```
 
 ### 11.2 在训练容器中运行微调
 
-下面命令在 `gemma4-train` 容器中执行，记得根据实际数据路径调整：
+下面命令在 `unsloth-train` 容器中执行，记得根据实际数据路径调整：
 
 ```bash
 cd /workspace_repo
@@ -533,7 +533,7 @@ torchrun --nproc_per_node=8 distributed_training/train_distributed.py \
 
 ```bash
 docker run -d \
-  --name gemma4-infer \
+  --name unsloth-infer \
   --gpus all \
   --cpus=64 \
   --memory=120g \
@@ -548,14 +548,14 @@ docker run -d \
   -v ${FLASH_ATTN_SAFE_HOME}/cache/huggingface:/opt/cache/huggingface \
   -v ${FLASH_ATTN_SAFE_HOME}/output:/opt/output \
   -w /workspace_repo \
-  gemma4-runtime:cu128-fa2 \
+  unsloth-runtime:cu128-fa2 \
   tail -f /dev/null
 ```
 
 进入推理容器：
 
 ```bash
-docker exec -it gemma4-infer bash
+docker exec -it unsloth-infer bash
 ```
 
 ### 12.2 在推理容器中运行推理
@@ -581,13 +581,13 @@ torchrun --nproc_per_node=8 distributed_training/distributed_inference.py \
 后续如果你在容器内追加安装了依赖，并希望保存到镜像：
 
 ```bash
-docker commit gemma4-dev gemma4-runtime:cu128-fa2-v2
+docker commit unsloth-dev unsloth-runtime:cu128-fa2-v2
 ```
 
 查看镜像：
 
 ```bash
-docker images | grep gemma4-runtime
+docker images | grep unsloth-runtime
 ```
 
 ## 14. 常见问题
@@ -606,7 +606,7 @@ export PYTHONPATH=/workspace_repo:$PYTHONPATH
 
 ```bash
 ls -lh ${FLASH_ATTN_SAFE_HOME}/wheels
-docker logs gemma4-installer 2>/dev/null | tail -n 200
+docker logs unsloth-installer 2>/dev/null | tail -n 200
 dmesg -T | grep -i -E "oom|killed process|out of memory" | tail -n 50
 ```
 
@@ -626,9 +626,10 @@ dmesg -T | grep -i -E "oom|killed process|out of memory" | tail -n 50
 1. 退出并删除旧容器
 2. 创建 `${FLASH_ATTN_SAFE_HOME}` 干净目录
 3. 在 `context/` 中生成 `Dockerfile` 与 `entrypoint.sh`
-4. 构建 `gemma4-safe-base:cu128`
-5. 启动受限的 `gemma4-installer`
+4. 构建 `unsloth-safe-base:cu128`
+5. 启动受限的 `unsloth-installer`
 6. 在容器内安装 PyTorch、项目依赖、`flash-attn`
 7. 运行 `check_flash_attention_env.py` 验证
-8. `docker commit` 生成 `gemma4-runtime:cu128-fa2`
+8. `docker commit` 生成 `unsloth-runtime:cu128-fa2`
 9. 基于该镜像分别启动训练容器和推理容器
+

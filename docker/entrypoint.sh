@@ -2,7 +2,7 @@
 set -euo pipefail
 
 CONDA_DIR="${CONDA_DIR:-/opt/conda}"
-CONDA_ENV="${CONDA_ENV:-gemma4}"
+CONDA_ENV="${CONDA_ENV:-unsloth-finetune}"
 CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
 
 export PATH="${CUDA_HOME}/bin:${CONDA_DIR}/bin:${PATH}"
