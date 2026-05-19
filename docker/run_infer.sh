@@ -25,7 +25,7 @@ fi
 declare -a cmd=(
     torchrun
     --nproc_per_node="${NPROC_PER_NODE}"
-    /workspace/distributed_training/distributed_inference.py
+    /workspace/scripts/distributed_inference.py
     --gpu_ids "${GPU_IDS}"
     --base_model_path "${BASE_MODEL_PATH}"
     --lora_adapter_path "${LORA_ADAPTER_PATH}"

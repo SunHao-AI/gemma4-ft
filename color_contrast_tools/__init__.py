@@ -1,23 +1,7 @@
-"""
-WCAG 2.1 颜色对比度工具包
+"""Compatibility wrapper for gemma4_ft.tools.color_contrast."""
+from importlib import import_module as _import_module
+import sys as _sys
 
-提供颜色转换和对比度计算的核心功能，以及颜色改进方案验证
-"""
-
-from .color_utils import (
-    hex_to_rgb,
-    rgb_to_hex,
-    srgb_to_linear,
-    get_relative_luminance,
-    calculate_contrast_ratio,
-    wcag_compliance,
-)
-
-__all__ = [
-    "hex_to_rgb",
-    "rgb_to_hex",
-    "srgb_to_linear",
-    "get_relative_luminance",
-    "calculate_contrast_ratio",
-    "wcag_compliance",
-]
+_module = _import_module("gemma4_ft.tools.color_contrast")
+globals().update(_module.__dict__)
+_sys.modules[__name__] = _module

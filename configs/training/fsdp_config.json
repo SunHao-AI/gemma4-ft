@@ -1,0 +1,15 @@
+{
+    "fsdp_auto_wrap_policy": "TRANSFORMER_BASED_WRAP",
+    "fsdp_sharding_strategy": "FULL_SHARD",
+    "fsdp_backward_prefetch_policy": "BACKWARD_PRE",
+    "fsdp_forward_prefetch_policy": "NO_PREFETCH",
+    "fsdp_cpu_offload": false,
+    "fsdp_use_orig_params": true,
+    "fsdp_min_num_params": 1000,
+    "fsdp_sync_module_states": true,
+    "fsdp_state_dict_type": "FULL_STATE_DICT",
+    "fsdp_grad_to_fp16": true,
+    "fsdp_nccl_timeout": 1800,
+    "fsdp_sharding_strategy_8gpu": "HYBRID_SHARD",
+    "fsdp_backward_prefetch_policy_8gpu": "BACKWARD_PRE"
+}

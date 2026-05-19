@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "gemma4-ft"
 version = "0.1.0"
@@ -43,6 +47,18 @@ dev = [
     "pytest-cov>=4.0.0",
     "ruff>=0.1.0",
 ]
+
+[project.scripts]
+gemma4-train = "gemma4_ft.training.distributed.train_distributed:main"
+gemma4-infer = "gemma4_ft.training.distributed.distributed_inference:main"
+gemma4-check-flash-attention = "gemma4_ft.training.distributed.check_flash_attention_env:main"
+gemma4-compare-runs = "gemma4_ft.training.distributed.compare_training_runs:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.ruff]
 line-length = 120

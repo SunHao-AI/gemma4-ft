@@ -57,7 +57,6 @@ COPY . /opt/project
 
 RUN source ${CONDA_DIR}/etc/profile.d/conda.sh && \
     conda activate ${CONDA_ENV} && \
-    pip install -r /opt/project/distributed_training/requirements.txt && \
     pip install -e "/opt/project[finetune,data,monitor,dev]" && \
     pip install flash-attn --no-build-isolation && \
     python - <<'PY'

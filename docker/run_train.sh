@@ -32,7 +32,7 @@ fi
 declare -a cmd=(
     torchrun
     --nproc_per_node="${NPROC_PER_NODE}"
-    /workspace/distributed_training/train_distributed.py
+    /workspace/scripts/train_distributed.py
     --model_name "${MODEL_NAME}"
     --data_path "${DATA_PATH}"
     --output_dir "${OUTPUT_DIR}"
