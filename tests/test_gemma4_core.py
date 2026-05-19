@@ -26,16 +26,29 @@ def test_bootstrap_notebook_context_resolves_project_root(tmp_path, monkeypatch)
     monkeypatch.delenv("GEMMA4_NOTEBOOK_DIR", raising=False)
     monkeypatch.delenv("GEMMA4_NOTEBOOK_FILE", raising=False)
     original_sys_path = list(sys.path)
+    original_notebook_dir = os.environ.get("GEMMA4_NOTEBOOK_DIR")
+    original_notebook_file = os.environ.get("GEMMA4_NOTEBOOK_FILE")
 
     try:
         context = bootstrap_notebook_context(notebook_file=str(notebook_file), cwd=project_root)
+        resolved_env_notebook_dir = os.environ.get("GEMMA4_NOTEBOOK_DIR")
+        resolved_env_notebook_file = os.environ.get("GEMMA4_NOTEBOOK_FILE")
     finally:
         sys.path[:] = original_sys_path
+        if original_notebook_dir is None:
+            os.environ.pop("GEMMA4_NOTEBOOK_DIR", None)
+        else:
+            os.environ["GEMMA4_NOTEBOOK_DIR"] = original_notebook_dir
+
+        if original_notebook_file is None:
+            os.environ.pop("GEMMA4_NOTEBOOK_FILE", None)
+        else:
+            os.environ["GEMMA4_NOTEBOOK_FILE"] = original_notebook_file
 
     assert context["NOTEBOOK_DIR"] == notebook_dir.resolve()
     assert context["PROJECT_ROOT"] == project_root.resolve()
-    assert os.environ["GEMMA4_NOTEBOOK_DIR"] == str(notebook_dir.resolve())
-    assert os.environ["GEMMA4_NOTEBOOK_FILE"] == str(notebook_file.resolve())
+    assert resolved_env_notebook_dir == str(notebook_dir.resolve())
+    assert resolved_env_notebook_file == str(notebook_file.resolve())
 
 
 def test_build_labelme_payload_prefers_result_image_size():

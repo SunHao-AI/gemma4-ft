@@ -323,3 +323,4 @@ docker-cache/
 5. 在容器中执行 `nvcc --version` 与 Python 依赖导入检查
 6. 运行 `python distributed_training/check_flash_attention_env.py`
 7. 先进行一轮短程训练验证，再正式启动全量训练
+
