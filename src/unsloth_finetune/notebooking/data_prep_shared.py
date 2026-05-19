@@ -1,12 +1,12 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict
 
-from gemma4_ft.data.labelme import create_progress_bar
-from gemma4_ft.data.labelme.file_utils import json_loads, parse_json_file
+from unsloth_finetune.data.labelme import create_progress_bar
+from unsloth_finetune.data.labelme.file_utils import json_loads, parse_json_file
 
 
 def prescan_label_statistics(source_dir: Path, max_workers: int = 4) -> Dict[str, Any]:
@@ -98,3 +98,4 @@ def verify_unsloth_format(jsonl_path: str | Path, num_samples: int = 3) -> tuple
     if errors:
         result["错误详情"] = "; ".join(errors[:3])
     return passed, result
+

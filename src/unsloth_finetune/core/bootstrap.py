@@ -1,9 +1,9 @@
-import os
+﻿import os
 import sys
 from pathlib import Path
 from typing import Iterable, Optional
 
-from gemma4_ft.core.runtime import resolve_notebook_dir
+from unsloth_finetune.core.runtime import resolve_notebook_dir
 
 PROJECT_MARKER = "pyproject.toml"
 
@@ -72,3 +72,4 @@ def bootstrap_notebook_context(
         "PROJECT_ROOT": project_root,
         "NOTEBOOK_FILE": os.environ.get("GEMMA4_NOTEBOOK_FILE", ""),
     }
+

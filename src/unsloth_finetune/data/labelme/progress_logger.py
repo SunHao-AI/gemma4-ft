@@ -1,4 +1,4 @@
-"""
+﻿"""
 共享的进度条与日志基础设施模块
 提供统一的tqdm进度条和日志系统配置，实现控制台输出与日志文件分离
 
@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Optional, Set, List, Dict, Any
 from datetime import datetime
 
-from gemma4_ft.core.runtime import DEFAULT_LOG_DATE_FORMAT, DEFAULT_LOG_FORMAT, build_logging_formatter
+from unsloth_finetune.core.runtime import DEFAULT_LOG_DATE_FORMAT, DEFAULT_LOG_FORMAT, build_logging_formatter
 
 IN_NOTEBOOK = False
 TQDM_AVAILABLE = False
@@ -446,3 +446,4 @@ def print_phase_footer(phase_name: str, completed: int, total: int) -> None:
     display_name = PhaseProgressManager.PHASE_DISPLAY_NAMES.get(phase_name, phase_name)
     percent = (completed / total * 100) if total > 0 else 100
     print(f"\n{display_name} 完成: {completed}/{total} ({percent:.1f}%) ✓")
+

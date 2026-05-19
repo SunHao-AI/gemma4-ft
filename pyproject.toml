@@ -1,4 +1,4 @@
-[build-system]
+﻿[build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
@@ -49,10 +49,10 @@ dev = [
 ]
 
 [project.scripts]
-gemma4-train = "gemma4_ft.training.distributed.train_distributed:main"
-gemma4-infer = "gemma4_ft.training.distributed.distributed_inference:main"
-gemma4-check-flash-attention = "gemma4_ft.training.distributed.check_flash_attention_env:main"
-gemma4-compare-runs = "gemma4_ft.training.distributed.compare_training_runs:main"
+gemma4-train = "unsloth_finetune.training.distributed.train_distributed:main"
+gemma4-infer = "unsloth_finetune.training.distributed.distributed_inference:main"
+gemma4-check-flash-attention = "unsloth_finetune.training.distributed.check_flash_attention_env:main"
+gemma4-compare-runs = "unsloth_finetune.training.distributed.compare_training_runs:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -70,3 +70,4 @@ select = ["E", "F", "W", "I"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+

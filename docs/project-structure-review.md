@@ -1,4 +1,4 @@
-# 项目结构问题分析报告
+﻿# 项目结构问题分析报告
 
 ## 当前结构存在的问题
 
@@ -19,7 +19,7 @@
 
 ## 重构目标
 
-- 建立统一主包 `src/gemma4_ft/`
+- 建立统一主包 `src/unsloth_finetune/`
 - 以 `core/data/training/notebooking/tools` 完成清晰分层
 - 将 `scripts/` 作为标准运行入口
 - 将 `configs/` 与 `requirements/` 独立出来，降低路径耦合
@@ -28,6 +28,7 @@
 ## 迁移原则
 
 - 优先保证运行链路稳定，再逐步清理兼容层
-- 优先调整内部标准导入到 `gemma4_ft.*`
+- 优先调整内部标准导入到 `unsloth_finetune.*`
 - notebook 保持可用，但共享逻辑全部以下沉包为准
 - 配置与文档同步更新，避免“代码已迁移、说明仍旧路径”
+

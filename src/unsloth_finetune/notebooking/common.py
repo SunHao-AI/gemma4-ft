@@ -1,8 +1,8 @@
-from pathlib import Path
+﻿from pathlib import Path
 from typing import Any, Dict, Optional
 
-from gemma4_ft.core.bootstrap import bootstrap_notebook_context
-from gemma4_ft.core.runtime import configure_unsloth_compile_cache
+from unsloth_finetune.core.bootstrap import bootstrap_notebook_context
+from unsloth_finetune.core.runtime import configure_unsloth_compile_cache
 
 
 def initialize_notebook_context(
@@ -14,3 +14,4 @@ def initialize_notebook_context(
     if configure_unsloth_cache:
         context["UNSLOTH_CACHE_DIR"] = configure_unsloth_compile_cache(context["NOTEBOOK_DIR"])
     return context
+

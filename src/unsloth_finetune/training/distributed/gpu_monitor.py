@@ -1,4 +1,4 @@
-"""GPU监控工具模块 - 多GPU分布式训练
+﻿"""GPU监控工具模块 - 多GPU分布式训练
 
 提供训练过程中各GPU的显存使用、计算负载和温度监控功能。
 支持作为HuggingFace Trainer Callback集成，也可独立使用。
@@ -21,7 +21,7 @@ from typing import Optional
 import torch
 from transformers import TrainerCallback
 
-from gemma4_ft.core.runtime import format_file_timestamp, get_aware_now
+from unsloth_finetune.core.runtime import format_file_timestamp, get_aware_now
 
 logger = logging.getLogger(__name__)
 
@@ -362,3 +362,4 @@ def print_gpu_info():
     print(f"CUDA版本: {torch.version.cuda}")
     print(f"PyTorch版本: {torch.__version__}")
     print(f"NCCL可用: {'是' if torch.distributed.is_nccl_available() else '否'}")
+

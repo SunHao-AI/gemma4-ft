@@ -1,4 +1,4 @@
-"""多模态数据集模块 - Gemma 4 视觉微调
+﻿"""多模态数据集模块 - Gemma 4 视觉微调
 
 参考 PyTorch Dataset 设计模式，封装数据加载与预处理流程，
 与 Unsloth SFTTrainer / HuggingFace Dataset 无缝集成。
@@ -37,7 +37,7 @@ from PIL import Image as PILImage
 from datasets import Dataset
 
 try:
-    from gemma4_ft.data.labelme.progress_logger import TQDM_AVAILABLE, create_progress_bar
+    from unsloth_finetune.data.labelme.progress_logger import TQDM_AVAILABLE, create_progress_bar
 except ImportError:
     try:
         from tqdm import tqdm as _tqdm_class
@@ -751,3 +751,4 @@ def create_vision_dataset(
         return mm_ds.to_hf_dataset_batched(batch_size=batch_size)
     else:
         return mm_ds.to_hf_dataset()
+

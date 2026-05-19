@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import gc
 import json
@@ -14,7 +14,7 @@ import requests
 import torch
 from PIL import Image, ImageDraw, ImageFont
 
-from gemma4_ft.training.distributed.adapter_utils import prepared_adapter_dir
+from unsloth_finetune.training.distributed.adapter_utils import prepared_adapter_dir
 
 
 DetectionPromptBuilder = Callable[[str], str]
@@ -796,3 +796,4 @@ class ObjectDetectionPipeline:
 
         result["success"] = True
         return result
+

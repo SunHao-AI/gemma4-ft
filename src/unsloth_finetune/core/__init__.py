@@ -1,16 +1,16 @@
-"""Core shared utilities for the Gemma4 fine-tuning project."""
+﻿"""Core shared utilities for the Gemma4 fine-tuning project."""
 
-from gemma4_ft.core.bootstrap import (
+from unsloth_finetune.core.bootstrap import (
     bootstrap_notebook_context,
     ensure_project_root_on_path,
     resolve_project_root,
 )
-from gemma4_ft.core.labelme_export import (
+from unsloth_finetune.core.labelme_export import (
     build_labelme_output_path,
     build_labelme_payload,
     save_labelme_results,
 )
-from gemma4_ft.core.runtime import (
+from unsloth_finetune.core.runtime import (
     DEFAULT_LOG_DATE_FORMAT,
     DEFAULT_LOG_FORMAT,
     DEFAULT_LOG_TIMEZONE,
@@ -49,3 +49,4 @@ __all__ = [
     "resolve_project_root",
     "save_labelme_results",
 ]
+

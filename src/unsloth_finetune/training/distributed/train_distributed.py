@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 """Unsloth分布式训练脚本 - Gemma 4-E4B (统一配置版)
 
 支持DDP/device_map/FSDP分布式训练模式, 通过DistributedConfig统一配置。
@@ -47,7 +47,7 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True,max_s
 
 import unsloth
 
-from gemma4_ft.training.distributed.distributed_config import (
+from unsloth_finetune.training.distributed.distributed_config import (
     DistributedConfig,
     DistributedMode,
     auto_detect_config,
@@ -59,7 +59,7 @@ from gemma4_ft.training.distributed.distributed_config import (
 import argparse
 import torch
 import torch.distributed as dist
-from gemma4_ft.core.runtime import configure_root_logging, configure_unsloth_compile_cache, resolve_notebook_dir
+from unsloth_finetune.core.runtime import configure_root_logging, configure_unsloth_compile_cache, resolve_notebook_dir
 from transformers import TrainerCallback
 
 NOTEBOOK_DIR = resolve_notebook_dir(cwd=Path.cwd(), notebook_file=os.environ.get("GEMMA4_NOTEBOOK_FILE", ""))
@@ -70,7 +70,7 @@ from unsloth import FastVisionModel
 configure_root_logging(level=logging.INFO if int(os.environ.get("LOCAL_RANK", 0)) == 0 else logging.WARNING)
 logger = logging.getLogger(__name__)
 
-from gemma4_ft.training.distributed.adapter_utils import normalize_saved_adapter_config
+from unsloth_finetune.training.distributed.adapter_utils import normalize_saved_adapter_config
 
 
 def parse_args():
@@ -504,7 +504,7 @@ def load_vision_data(
     image_batch_size: int | None = None,
     materialize_dataset: bool = False,
 ):
-    from gemma4_ft.training.distributed.dataset import MultimodalDataset
+    from unsloth_finetune.training.distributed.dataset import MultimodalDataset
 
     data_file = Path(data_path)
     if not data_file.exists():
@@ -710,7 +710,7 @@ def main():
         trainer_kwargs["dataset_text_field"] = "text"
 
     if config.gpu_monitor:
-        from gemma4_ft.training.distributed.gpu_monitor import GPUMonitor, GPUMonitorCallback
+        from unsloth_finetune.training.distributed.gpu_monitor import GPUMonitor, GPUMonitorCallback
 
         gpu_monitor_inst = GPUMonitor(
             log_dir=config.gpu_log_dir,
@@ -817,3 +817,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

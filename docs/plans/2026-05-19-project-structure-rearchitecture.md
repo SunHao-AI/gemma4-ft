@@ -1,10 +1,10 @@
-# Project Structure Rearchitecture Implementation Plan
+﻿# Project Structure Rearchitecture Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** 基于当前 Gemma4 多模态训练仓库完成一次工程化目录重构，将源码、脚本、实验材料与文档职责分层，并在保证现有流程可运行的前提下完成路径迁移与兼容更新。
 
-**Architecture:** 采用主流 Python/ML 应用型项目结构：源码统一收口到 `src/gemma4_ft/`，按 `core/data/training/tools/notebooking` 分层；`notebooks/` 仅保留 `.ipynb` 实验与展示资产；根级旧包保留为极薄兼容层，避免历史导入与外部脚本立即失效。通过更新 `pyproject.toml`、脚本入口、文档路径与测试导入，逐步将仓库切换到新的主包结构。
+**Architecture:** 采用主流 Python/ML 应用型项目结构：源码统一收口到 `src/unsloth_finetune/`，按 `core/data/training/tools/notebooking` 分层；`notebooks/` 仅保留 `.ipynb` 实验与展示资产；根级旧包保留为极薄兼容层，避免历史导入与外部脚本立即失效。通过更新 `pyproject.toml`、脚本入口、文档路径与测试导入，逐步将仓库切换到新的主包结构。
 
 **Tech Stack:** Python 3.10+, setuptools/pyproject, PyTorch, Transformers, Unsloth, pytest, Jupyter Notebook, Docker
 
@@ -40,7 +40,7 @@
 文档中给出目标结构：
 
 ```text
-src/gemma4_ft/
+src/unsloth_finetune/
   core/
   data/labelme/
   training/distributed/
@@ -56,27 +56,27 @@ docker/
 **Step 4: 记录迁移映射**
 
 明确以下映射：
-- `gemma4_core/* -> src/gemma4_ft/core/*`
-- `labelme_tools/* -> src/gemma4_ft/data/labelme/*`
-- `distributed_training/* -> src/gemma4_ft/training/distributed/*`
-- `color_contrast_tools/* -> src/gemma4_ft/tools/color_contrast/*`
-- `notebooks/*.py -> src/gemma4_ft/notebooking/*`
+- `gemma4_core/* -> src/unsloth_finetune/core/*`
+- `labelme_tools/* -> src/unsloth_finetune/data/labelme/*`
+- `distributed_training/* -> src/unsloth_finetune/training/distributed/*`
+- `color_contrast_tools/* -> src/unsloth_finetune/tools/color_contrast/*`
+- `notebooks/*.py -> src/unsloth_finetune/notebooking/*`
 - 根级执行脚本通过 `scripts/` 或兼容层指向新模块
 
 ### Task 2: 建立新源码结构并迁移包实现
 
 **Files:**
-- Create: `src/gemma4_ft/__init__.py`
-- Create: `src/gemma4_ft/core/*.py`
-- Create: `src/gemma4_ft/data/labelme/*.py`
-- Create: `src/gemma4_ft/training/distributed/*.py`
-- Create: `src/gemma4_ft/tools/color_contrast/*.py`
-- Create: `src/gemma4_ft/notebooking/*.py`
+- Create: `src/unsloth_finetune/__init__.py`
+- Create: `src/unsloth_finetune/core/*.py`
+- Create: `src/unsloth_finetune/data/labelme/*.py`
+- Create: `src/unsloth_finetune/training/distributed/*.py`
+- Create: `src/unsloth_finetune/tools/color_contrast/*.py`
+- Create: `src/unsloth_finetune/notebooking/*.py`
 - Modify: `pyproject.toml`
 
 **Step 1: 创建新主包骨架**
 
-创建 `src/gemma4_ft/` 及分层子包，补齐 `__init__.py`。
+创建 `src/unsloth_finetune/` 及分层子包，补齐 `__init__.py`。
 
 **Step 2: 迁移实际源码**
 
@@ -91,7 +91,7 @@ docker/
 
 **Step 4: 切换打包配置**
 
-修改 `pyproject.toml`，启用 `src` 布局包发现，使 `gemma4_ft` 成为标准安装入口。
+修改 `pyproject.toml`，启用 `src` 布局包发现，使 `unsloth_finetune` 成为标准安装入口。
 
 ### Task 3: 建立兼容层并更新路径引用
 
@@ -121,11 +121,11 @@ docker/
 **Step 2: 更新标准导入路径**
 
 把项目内部标准导入切换到：
-- `gemma4_ft.core.*`
-- `gemma4_ft.data.labelme.*`
-- `gemma4_ft.training.distributed.*`
-- `gemma4_ft.tools.color_contrast.*`
-- `gemma4_ft.notebooking.*`
+- `unsloth_finetune.core.*`
+- `unsloth_finetune.data.labelme.*`
+- `unsloth_finetune.training.distributed.*`
+- `unsloth_finetune.tools.color_contrast.*`
+- `unsloth_finetune.notebooking.*`
 
 **Step 3: 更新 notebook 与脚本路径**
 
@@ -174,3 +174,4 @@ docker/
 - 模块依赖关系
 - 团队协作约定
 - 后续可逐步删除的兼容层清单
+
