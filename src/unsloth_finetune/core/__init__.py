@@ -1,4 +1,4 @@
-﻿"""Core shared utilities for the Gemma4 fine-tuning project."""
+"""Core shared utilities for the Unsloth multimodal fine-tuning and evaluation project."""
 
 from unsloth_finetune.core.bootstrap import (
     bootstrap_notebook_context,

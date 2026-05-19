@@ -1,6 +1,6 @@
 ﻿# Docker 训练与推理环境指南
 
-本文档提供一套将 Gemma4 微调与推理迁移到 Docker 容器内运行的完整流程。目标是让宿主机只保留 NVIDIA Driver、Docker 和 GPU runtime，`conda`、`CUDA toolkit`、`nvcc`、`flash-attn`、训练依赖和虚拟环境都放到容器内管理。
+本文档提供一套将基于 Unsloth 的多模态微调与推理迁移到 Docker 容器内运行的完整流程（以 Gemma 4 等模型为示例）。目标是让宿主机只保留 NVIDIA Driver、Docker 和 GPU runtime，`conda`、`CUDA toolkit`、`nvcc`、`flash-attn`、训练依赖和虚拟环境都放到容器内管理。
 
 ## 1. 方案说明
 
@@ -319,10 +319,8 @@ docker-cache/
 1. 在宿主机安装 Docker 与 `nvidia-container-toolkit`
 2. 运行 GPU 容器自检命令，确认 Docker 能识别 GPU
 3. 在仓库根目录执行 `docker compose build --progress=plain`
-4. 运行 `docker compose run --rm gemma4`
+4. 运行 `docker compose run --rm unsloth`
 5. 在容器中执行 `nvcc --version` 与 Python 依赖导入检查
 6. 运行 `python scripts/check_flash_attention_env.py`
 7. 先进行一轮短程训练验证，再正式启动全量训练
-
-
 

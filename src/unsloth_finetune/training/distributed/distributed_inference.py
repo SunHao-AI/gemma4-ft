@@ -1,10 +1,10 @@
-﻿#!/usr/bin/env python3
-import unsloth
+#!/usr/bin/env python3
 import argparse
 import gc
 import json
 import os
 import re
+import sys
 import time
 import traceback
 from contextlib import ExitStack, contextmanager, redirect_stderr, redirect_stdout
@@ -22,6 +22,7 @@ from unsloth_finetune.core.labelme_export import save_labelme_results
 from unsloth_finetune.core.runtime import (
     configure_unsloth_compile_cache,
     format_log_timestamp,
+    get_env_value,
     resolve_notebook_dir,
 )
 from unsloth_finetune.training.distributed.load_balancer import (
@@ -35,7 +36,7 @@ from unsloth_finetune.training.distributed.adapter_utils import prepared_adapter
 
 NOTEBOOK_DIR = resolve_notebook_dir(
     cwd=Path.cwd(),
-    notebook_file=os.environ.get("GEMMA4_NOTEBOOK_FILE", ""),
+    notebook_file=get_env_value("UNSLOTH_NOTEBOOK_FILE", "GEMMA4_NOTEBOOK_FILE"),
 )
 UNSLOTH_CACHE_DIR = configure_unsloth_compile_cache(NOTEBOOK_DIR)
 
@@ -48,11 +49,14 @@ INFERENCE_MAX_NEW_TOKENS = 512
 
 
 def verbose_status_enabled() -> bool:
-    return os.environ.get("GEMMA4_VERBOSE_TQDM_STATUS", "").strip() == "1"
+    return get_env_value("UNSLOTH_VERBOSE_TQDM_STATUS", "GEMMA4_VERBOSE_TQDM_STATUS") == "1"
 
 
 def parse_live_tqdm_ranks() -> Optional[set]:
-    raw = os.environ.get("GEMMA4_LIVE_TQDM_RANKS", "none").strip().lower()
+    raw = (
+        get_env_value("UNSLOTH_LIVE_TQDM_RANKS", "GEMMA4_LIVE_TQDM_RANKS").strip().lower()
+        or "none"
+    )
     if not raw or raw in {"none", "off", "disabled"}:
         return set()
     if raw in {"all", "*"}:
@@ -71,7 +75,7 @@ def parse_live_tqdm_ranks() -> Optional[set]:
 
 
 def live_tqdm_enabled(rank: Optional[int] = None) -> bool:
-    override = os.environ.get("GEMMA4_FORCE_LIVE_TQDM", "").strip().lower()
+    override = get_env_value("UNSLOTH_FORCE_LIVE_TQDM", "GEMMA4_FORCE_LIVE_TQDM").strip().lower()
     if override in {"1", "true", "yes", "on"}:
         return True
     if override in {"0", "false", "no", "off"}:
@@ -1487,7 +1491,7 @@ def merge_results(result_dir: Path, model_type: str) -> Tuple[List[Dict[str, Any
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Distributed multi-GPU inference for Gemma4 comparison")
+    parser = argparse.ArgumentParser(description="Distributed multi-GPU inference for multimodal model comparison")
     parser.add_argument("--gpu_ids", type=str, required=True)
     parser.add_argument("--base_model_path", type=str, required=True)
     parser.add_argument("--lora_adapter_path", type=str, default="")

@@ -19,7 +19,7 @@ def resolve_mode_subdir(mode: str) -> str:
     return MODE_DIR_MAP.get(mode, mode.lower())
 
 
-def build_lora_output_base(project_root: Path, model_name_short: str = "gemma4_e4b_lora") -> Path:
+def build_lora_output_base(project_root: Path, model_name_short: str = "unsloth_mm_lora") -> Path:
     return Path(project_root) / "models" / "finetuned" / model_name_short
 
 
@@ -27,7 +27,7 @@ def build_lora_output_dir(
     project_root: Path,
     training_mode: str,
     train_timestamp: str,
-    model_name_short: str = "gemma4_e4b_lora",
+    model_name_short: str = "unsloth_mm_lora",
 ) -> Path:
     return build_lora_output_base(project_root, model_name_short) / resolve_mode_subdir(training_mode) / train_timestamp
 

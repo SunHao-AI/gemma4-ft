@@ -5,7 +5,7 @@
 `unsloth-finetune` 采用应用型 ML 工程仓库结构，服务于以下场景：
 
 - LabelMe 数据清洗、统计、采样与格式转换
-- Gemma4 / Unsloth 多模态训练与分布式推理
+- 基于 Unsloth 的多模态微调与分布式推理（以 Gemma 4 等模型为示例）
 - Notebook 演示、实验编排与效果分析
 - Docker 化本地开发和训练环境
 
@@ -30,11 +30,7 @@ unsloth-finetune/
 ├── configs/                         # 版本化配置资源
 ├── requirements/                    # 附加依赖清单
 ├── docker/                          # 容器构建与运行脚本
-├── docs/                            # 架构与迁移文档
-├── scripts/                         # 运行入口
-├── src/                             # 标准源码主包
-├── tests/                           # 自动化测试
-└── notebooks/                       # Notebook 与演示
+└── docs/                            # 架构与迁移文档
 ```
 
 ## 分层职责
@@ -112,12 +108,11 @@ unsloth_finetune.tools.color_contrast
 
 以下旧兼容层已完成迁移并进入清理范围：
 
-- `gemma4_core/`
-- `labelme_tools/`
-- `distributed_training/`
-- `color_contrast_tools/`
+- `gemma4_core/`（历史兼容层，命名保留）
+- `labelme_tools/`（历史兼容层）
+- `distributed_training/`（历史兼容层）
+- `color_contrast_tools/`（历史兼容层）
 - `notebooks/*.py`
 
 旧路径引用已迁移到 `unsloth_finetune.*` 与 `scripts/`，兼容层可在验证通过后移除。
-
 

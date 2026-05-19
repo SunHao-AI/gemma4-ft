@@ -1,4 +1,4 @@
-﻿"""多模态数据集模块 - Gemma 4 视觉微调
+"""多模态数据集模块 - Unsloth 视觉微调
 
 参考 PyTorch Dataset 设计模式，封装数据加载与预处理流程，
 与 Unsloth SFTTrainer / HuggingFace Dataset 无缝集成。
@@ -107,7 +107,7 @@ def print_memory_status(prefix: str = "内存状态") -> None:
 
 
 class MultimodalDataset:
-    """多模态数据集 - Gemma 4 视觉微调
+    """多模态数据集 - Unsloth 视觉微调
 
     参考 PyTorch torch.utils.data.Dataset 设计模式:
     - __len__: 返回数据集大小

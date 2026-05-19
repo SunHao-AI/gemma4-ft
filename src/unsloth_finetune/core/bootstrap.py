@@ -1,4 +1,4 @@
-﻿import os
+import os
 import sys
 from pathlib import Path
 from typing import Iterable, Optional
@@ -63,13 +63,17 @@ def bootstrap_notebook_context(
         fallback=notebook_dir.parent,
     )
 
+    os.environ["UNSLOTH_NOTEBOOK_DIR"] = str(notebook_dir)
     os.environ["GEMMA4_NOTEBOOK_DIR"] = str(notebook_dir)
     if notebook_file:
-        os.environ["GEMMA4_NOTEBOOK_FILE"] = str(Path(notebook_file).expanduser().resolve())
+        notebook_file_value = str(Path(notebook_file).expanduser().resolve())
+        os.environ["UNSLOTH_NOTEBOOK_FILE"] = notebook_file_value
+        os.environ["GEMMA4_NOTEBOOK_FILE"] = notebook_file_value
 
     return {
         "NOTEBOOK_DIR": notebook_dir,
         "PROJECT_ROOT": project_root,
-        "NOTEBOOK_FILE": os.environ.get("GEMMA4_NOTEBOOK_FILE", ""),
+        "NOTEBOOK_FILE": os.environ.get("UNSLOTH_NOTEBOOK_FILE", "")
+        or os.environ.get("GEMMA4_NOTEBOOK_FILE", ""),
     }
 

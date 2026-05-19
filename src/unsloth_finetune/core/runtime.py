@@ -16,10 +16,28 @@ DEFAULT_UNSLOTH_CACHE_DIRNAME = "unsloth_compiled_cache"
 DEFAULT_LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 DEFAULT_LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S %Z%z"
 
+LEGACY_ENV_NOTEBOOK_DIR = "GEMMA4_NOTEBOOK_DIR"
+LEGACY_ENV_LOG_TIMEZONE = "GEMMA4_LOG_TIMEZONE"
+LEGACY_ENV_COMPILE_CACHE_DIR = "GEMMA4_UNSLOTH_COMPILE_CACHE_DIR"
+
+ENV_NOTEBOOK_DIR = "UNSLOTH_NOTEBOOK_DIR"
+ENV_LOG_TIMEZONE = "UNSLOTH_LOG_TIMEZONE"
+ENV_COMPILE_CACHE_DIR = "UNSLOTH_COMPILE_CACHE_DIR"
+
+
+def get_env_value(primary: str, legacy: str = "") -> str:
+    value = os.environ.get(primary, "").strip() if primary else ""
+    if value:
+        return value
+    if legacy:
+        return os.environ.get(legacy, "").strip()
+    return ""
+
+
 
 def resolve_notebook_dir(cwd: Optional[Path] = None, notebook_file: str = "") -> Path:
     """Resolve the real notebook directory instead of relying on the process cwd."""
-    env_notebook_dir = os.environ.get("GEMMA4_NOTEBOOK_DIR", "").strip()
+    env_notebook_dir = get_env_value(ENV_NOTEBOOK_DIR, LEGACY_ENV_NOTEBOOK_DIR)
     if env_notebook_dir:
         return Path(env_notebook_dir).expanduser().resolve()
     if notebook_file:
@@ -28,7 +46,7 @@ def resolve_notebook_dir(cwd: Optional[Path] = None, notebook_file: str = "") ->
 
 
 def get_log_timezone_name() -> str:
-    return os.environ.get("GEMMA4_LOG_TIMEZONE", DEFAULT_LOG_TIMEZONE).strip() or DEFAULT_LOG_TIMEZONE
+    return get_env_value(ENV_LOG_TIMEZONE, LEGACY_ENV_LOG_TIMEZONE) or DEFAULT_LOG_TIMEZONE
 
 
 def get_log_timezone():
@@ -94,7 +112,8 @@ def configure_unsloth_compile_cache(
     cache_dir = Path(base_dir).expanduser().resolve() / cache_dir_name
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    os.environ["GEMMA4_UNSLOTH_COMPILE_CACHE_DIR"] = str(cache_dir)
+    os.environ[ENV_COMPILE_CACHE_DIR] = str(cache_dir)
+    os.environ[LEGACY_ENV_COMPILE_CACHE_DIR] = str(cache_dir)
     os.environ["UNSLOTH_COMPILE_LOCATION"] = str(cache_dir)
 
     try:

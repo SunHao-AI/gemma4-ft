@@ -1,8 +1,8 @@
-﻿#!/usr/bin/env python
-"""Unsloth分布式训练脚本 - Gemma 4-E4B (统一配置版)
+#!/usr/bin/env python
+"""Unsloth 分布式多模态微调脚本（统一配置版）
 
-支持DDP/device_map/FSDP分布式训练模式, 通过DistributedConfig统一配置。
-针对8张NVIDIA A6000 GPU (48GB)优化。
+支持 DDP/device_map/FSDP 分布式训练模式，通过 DistributedConfig 统一配置。
+训练模型与数据格式遵循 Unsloth 视觉微调接口，可用于 Gemma 4 等视觉语言模型。
 
 启动命令示例:
   # DDP 8卡训练 (推荐, 小模型)
@@ -45,8 +45,6 @@ from pathlib import Path
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True,max_split_size_mb:256")
 
-import unsloth
-
 from unsloth_finetune.training.distributed.distributed_config import (
     DistributedConfig,
     DistributedMode,
@@ -59,10 +57,18 @@ from unsloth_finetune.training.distributed.distributed_config import (
 import argparse
 import torch
 import torch.distributed as dist
-from unsloth_finetune.core.runtime import configure_root_logging, configure_unsloth_compile_cache, resolve_notebook_dir
+from unsloth_finetune.core.runtime import (
+    configure_root_logging,
+    configure_unsloth_compile_cache,
+    get_env_value,
+    resolve_notebook_dir,
+)
 from transformers import TrainerCallback
 
-NOTEBOOK_DIR = resolve_notebook_dir(cwd=Path.cwd(), notebook_file=os.environ.get("GEMMA4_NOTEBOOK_FILE", ""))
+NOTEBOOK_DIR = resolve_notebook_dir(
+    cwd=Path.cwd(),
+    notebook_file=get_env_value("UNSLOTH_NOTEBOOK_FILE", "GEMMA4_NOTEBOOK_FILE"),
+)
 UNSLOTH_CACHE_DIR = configure_unsloth_compile_cache(NOTEBOOK_DIR)
 
 from unsloth import FastVisionModel

@@ -76,7 +76,7 @@ def prepared_adapter_dir(adapter_dir: str) -> Iterator[Path]:
         yield source_dir
         return
 
-    temp_dir = tempfile.TemporaryDirectory(prefix="gemma4_adapter_")
+    temp_dir = tempfile.TemporaryDirectory(prefix="unsloth_adapter_")
     temp_path = Path(temp_dir.name)
     try:
         for item in source_dir.iterdir():

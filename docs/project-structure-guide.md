@@ -1,4 +1,4 @@
-﻿# 项目结构说明指南
+# 项目结构说明指南
 
 ## 新目录布局
 
@@ -58,10 +58,10 @@ docs/
 
 以下路径后续可分阶段下线：
 
-- `gemma4_core/`
-- `labelme_tools/`
-- `distributed_training/`
-- `color_contrast_tools/`
+- `gemma4_core/`（历史兼容层，命名保留）
+- `labelme_tools/`（历史兼容层）
+- `distributed_training/`（历史兼容层）
+- `color_contrast_tools/`（历史兼容层）
 - `notebooks/*.py`
 
 当前仓库已完成旧路径引用迁移，兼容层在验证通过后可直接移除。
