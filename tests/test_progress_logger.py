@@ -1,4 +1,4 @@
-"""
+﻿"""
 测试 progress_logger 模块的核心功能
 覆盖 setup_progress_logging, create_progress_bar, PhaseProgressManager,
 print_phase_header, print_phase_footer, SUPPORTED_IMAGE_EXTENSIONS 等
@@ -13,7 +13,7 @@ from unittest import mock
 
 import pytest
 
-from labelme_tools.progress_logger import (
+from unsloth_finetune.data.labelme.progress_logger import (
     IN_NOTEBOOK,
     SUPPORTED_IMAGE_EXTENSIONS,
     TQDM_AVAILABLE,
@@ -106,7 +106,7 @@ class TestSetupProgressLogging:
 class TestCreateProgressBar:
 
     def test_returns_none_when_tqdm_not_available(self):
-        with mock.patch("labelme_tools.progress_logger.TQDM_AVAILABLE", False):
+        with mock.patch("unsloth_finetune.data.labelme.progress_logger.TQDM_AVAILABLE", False):
             result = create_progress_bar(total=10, desc="test")
             assert result is None
 
@@ -270,7 +270,7 @@ class TestPhaseProgressManager:
         phases = ["validation"]
         manager = PhaseProgressManager(phases, use_tqdm=True)
         # If TQDM_AVAILABLE is False, use_tqdm should be False
-        with mock.patch("labelme_tools.progress_logger.TQDM_AVAILABLE", False):
+        with mock.patch("unsloth_finetune.data.labelme.progress_logger.TQDM_AVAILABLE", False):
             manager2 = PhaseProgressManager(phases, use_tqdm=True)
             assert manager2.use_tqdm is False
 

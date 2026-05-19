@@ -1,4 +1,4 @@
-"""
+﻿"""
 测试 color_utils 模块的核心功能
 覆盖 hex_to_rgb, rgb_to_hex, srgb_to_linear, get_relative_luminance,
 calculate_contrast_ratio, wcag_compliance
@@ -6,7 +6,7 @@ calculate_contrast_ratio, wcag_compliance
 
 import pytest
 
-from color_contrast_tools.color_utils import (
+from unsloth_finetune.tools.color_contrast.color_utils import (
     calculate_contrast_ratio,
     get_relative_luminance,
     hex_to_rgb,

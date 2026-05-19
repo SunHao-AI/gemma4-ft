@@ -1,4 +1,4 @@
-"""
+﻿"""
 测试 file_utils 模块的核心功能
 覆盖 find_json_files, parse_json_file, find_image_file, get_relative_path,
 json_loads, json_dumps_str, write_json_file, ORJSON_AVAILABLE, create_file_link 等
@@ -15,7 +15,7 @@ from unittest import mock
 
 import pytest
 
-from labelme_tools.file_utils import (
+from unsloth_finetune.data.labelme.file_utils import (
     ORJSON_AVAILABLE,
     create_file_link,
     find_image_file,
@@ -26,7 +26,7 @@ from labelme_tools.file_utils import (
     parse_json_file,
     write_json_file,
 )
-from labelme_tools.progress_logger import (
+from unsloth_finetune.data.labelme.progress_logger import (
     SUPPORTED_IMAGE_EXTENSIONS,
     create_progress_bar,
     setup_progress_logging,

@@ -1,9 +1,9 @@
-import os
+﻿import os
 import sys
 from pathlib import Path
 
-from gemma4_core.bootstrap import bootstrap_notebook_context
-from gemma4_core.labelme_export import (
+from unsloth_finetune.core.bootstrap import bootstrap_notebook_context
+from unsloth_finetune.core.labelme_export import (
     build_labelme_output_path,
     build_labelme_payload,
     save_labelme_results,
@@ -116,3 +116,4 @@ def test_save_labelme_results_writes_files_and_continues_after_failures(tmp_path
     assert summary["written"] == 1
     assert summary["failed"] == 1
     assert messages
+

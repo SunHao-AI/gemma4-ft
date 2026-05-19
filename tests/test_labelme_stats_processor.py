@@ -1,4 +1,4 @@
-"""
+﻿"""
 测试 labelme_stats_processor 模块的核心功能
 覆盖 FilterCopyResult, StatisticsFileProcessor, process_statistics_file
 """
@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from labelme_tools.labelme_stats_processor import (
+from unsloth_finetune.data.labelme.labelme_stats_processor import (
     FilterCopyResult,
     StatisticsFileProcessor,
     process_statistics_file,

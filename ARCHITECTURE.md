@@ -1,4 +1,4 @@
-# unsloth-finetune 项目架构文档
+﻿# unsloth-finetune 项目架构文档
 
 ## 项目定位
 
@@ -31,10 +31,10 @@ unsloth-finetune/
 ├── requirements/                    # 附加依赖清单
 ├── docker/                          # 容器构建与运行脚本
 ├── docs/                            # 架构与迁移文档
-├── gemma4_core/                     # 兼容层
-├── labelme_tools/                   # 兼容层
-├── distributed_training/            # 兼容层
-└── color_contrast_tools/            # 兼容层
+├── scripts/                         # 运行入口
+├── src/                             # 标准源码主包
+├── tests/                           # 自动化测试
+└── notebooks/                       # Notebook 与演示
 ```
 
 ## 分层职责
@@ -108,9 +108,9 @@ unsloth_finetune.tools.color_contrast
 - `unsloth-check-flash-attention`
 - `unsloth-compare-runs`
 
-## 兼容策略
+## 清理状态
 
-以下目录在重构后保留为兼容层：
+以下旧兼容层已完成迁移并进入清理范围：
 
 - `gemma4_core/`
 - `labelme_tools/`
@@ -118,5 +118,6 @@ unsloth_finetune.tools.color_contrast
 - `color_contrast_tools/`
 - `notebooks/*.py`
 
-兼容层仅做转发导入，后续应逐步清理业务代码中的旧路径引用。
+旧路径引用已迁移到 `unsloth_finetune.*` 与 `scripts/`，兼容层可在验证通过后移除。
+
 

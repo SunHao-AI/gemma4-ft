@@ -1,4 +1,4 @@
-"""
+﻿"""
 测试 distributed_config 模块的核心功能
 覆盖 DistributedMode, LRScalingStrategy, DeviceMapStrategy, DistributedConfig,
 create_ddp_config, create_device_map_config, create_fsdp_config, auto_detect_config
@@ -38,7 +38,7 @@ for mod_name, mod_obj in _mock_modules.items():
     if mod_name not in sys.modules:
         sys.modules[mod_name] = mod_obj
 
-from distributed_training.distributed_config import (
+from unsloth_finetune.training.distributed.distributed_config import (
     DeviceMapStrategy,
     DistributedConfig,
     DistributedMode,
@@ -715,3 +715,4 @@ class TestAutoDetectConfig:
         _set_gpu_count(0)
         with pytest.raises(RuntimeError, match="未检测到GPU"):
             auto_detect_config()
+

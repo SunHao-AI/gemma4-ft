@@ -1,4 +1,4 @@
-"""
+﻿"""
 测试 labelme_converter 模块的核心功能
 覆盖 BoundingBox, ConversionRecord, DatasetSplit, ConversionResult, LabelMeConverter
 """
@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from labelme_tools.labelme_converter import (
+from unsloth_finetune.data.labelme.labelme_converter import (
     BoundingBox,
     ConversionRecord,
     ConversionResult,

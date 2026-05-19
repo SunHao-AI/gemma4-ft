@@ -1,4 +1,4 @@
-# Docker 训练与推理环境指南
+﻿# Docker 训练与推理环境指南
 
 本文档提供一套将 Gemma4 微调与推理迁移到 Docker 容器内运行的完整流程。目标是让宿主机只保留 NVIDIA Driver、Docker 和 GPU runtime，`conda`、`CUDA toolkit`、`nvcc`、`flash-attn`、训练依赖和虚拟环境都放到容器内管理。
 
@@ -9,7 +9,7 @@
 - `devel` 镜像自带 `CUDA toolkit` 和 `nvcc`
 - 容器内安装 `Miniforge` 并创建 `Python 3.11` 虚拟环境
 - 容器内安装 `torch==2.10.0+cu128`、`unsloth`、`xformers`、`flash-attn`
-- 训练与推理直接调用当前仓库中的 `distributed_training/train_distributed.py` 与 `distributed_training/distributed_inference.py`
+- 训练与推理直接调用当前仓库中的 `scripts/train_distributed.py` 与 `scripts/distributed_inference.py`
 
 ## 2. 宿主机前置条件
 
@@ -167,7 +167,7 @@ PY
 如果需要更详细的 attention backend 报告：
 
 ```bash
-python distributed_training/check_flash_attention_env.py
+python scripts/check_flash_attention_env.py
 cat flash_attention_env_report.json
 ```
 
@@ -206,7 +206,7 @@ EXTRA_ARGS="--save_total_limit 3 --warmup_ratio 0.03 --benchmark" unsloth-train.
 ### 9.2 直接调用训练脚本
 
 ```bash
-torchrun --nproc_per_node=8 /workspace/distributed_training/train_distributed.py \
+torchrun --nproc_per_node=8 /workspace/scripts/train_distributed.py \
   --model_name google/gemma-3-4b-it \
   --data_path /workspace/data/train.jsonl \
   --output_dir /workspace/output/train_run_01 \
@@ -246,7 +246,7 @@ unsloth-infer.sh
 ### 10.2 直接调用分布式推理脚本
 
 ```bash
-torchrun --nproc_per_node=8 /workspace/distributed_training/distributed_inference.py \
+torchrun --nproc_per_node=8 /workspace/scripts/distributed_inference.py \
   --model_path /workspace/output/train_run_01 \
   --input_path /workspace/data/infer.json \
   --output_path /workspace/output/infer_result.json \
@@ -321,7 +321,8 @@ docker-cache/
 3. 在仓库根目录执行 `docker compose build --progress=plain`
 4. 运行 `docker compose run --rm gemma4`
 5. 在容器中执行 `nvcc --version` 与 Python 依赖导入检查
-6. 运行 `python distributed_training/check_flash_attention_env.py`
+6. 运行 `python scripts/check_flash_attention_env.py`
 7. 先进行一轮短程训练验证，再正式启动全量训练
+
 
 

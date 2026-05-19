@@ -1,4 +1,4 @@
-# 受限 Docker 容器构建与镜像固化指南
+﻿# 受限 Docker 容器构建与镜像固化指南
 
 本文档用于在远程 Ubuntu 22.04 服务器上，以“半数服务器资源上限”的方式，重新创建一个干净的 Docker 工作目录，构建一个带有 `conda`、`CUDA toolkit / nvcc`、`PyTorch cu128`、`flash-attn` 的可复用运行时镜像。后续微调、推理都基于该镜像启动，不再在宿主机直接安装底层依赖。
 
@@ -308,7 +308,7 @@ export TMPDIR=/opt/tmp
 
 pip install -U pip setuptools wheel packaging ninja
 pip install torch==2.10.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
-pip install -r /workspace_repo/distributed_training/requirements.txt
+pip install -r /workspace_repo/requirements/distributed-training.txt
 pip install pynvml
 ```
 
@@ -372,7 +372,7 @@ PY
 ```bash
 cd /workspace_repo
 export PYTHONPATH=/workspace_repo:$PYTHONPATH
-python distributed_training/check_flash_attention_env.py
+python scripts/check_flash_attention_env.py
 cat flash_attention_env_report.json
 ```
 
@@ -503,7 +503,7 @@ export PATH=$CUDA_HOME/bin:$PATH
 export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:256
 
-torchrun --nproc_per_node=8 distributed_training/train_distributed.py \
+torchrun --nproc_per_node=8 scripts/train_distributed.py \
   --model_name google/gemma-3-4b-it \
   --data_path /workspace_repo/data/train.jsonl \
   --output_dir /opt/output/train_run_01 \
@@ -564,7 +564,7 @@ docker exec -it unsloth-infer bash
 cd /workspace_repo
 export PYTHONPATH=/workspace_repo:$PYTHONPATH
 
-torchrun --nproc_per_node=8 distributed_training/distributed_inference.py \
+torchrun --nproc_per_node=8 scripts/distributed_inference.py \
   --gpu_ids 0,1,2,3,4,5,6,7 \
   --base_model_path google/gemma-3-4b-it \
   --lora_adapter_path /opt/output/train_run_01 \
@@ -632,4 +632,5 @@ dmesg -T | grep -i -E "oom|killed process|out of memory" | tail -n 50
 7. 运行 `check_flash_attention_env.py` 验证
 8. `docker commit` 生成 `unsloth-runtime:cu128-fa2`
 9. 基于该镜像分别启动训练容器和推理容器
+
 

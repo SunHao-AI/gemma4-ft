@@ -1,7 +1,7 @@
-import importlib.util
+﻿import importlib.util
 from pathlib import Path
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "distributed_training" / "load_balancer.py"
+MODULE_PATH = Path(__file__).resolve().parents[1] / "src" / "unsloth_finetune" / "training" / "distributed" / "load_balancer.py"
 SPEC = importlib.util.spec_from_file_location("load_balancer_under_test", MODULE_PATH)
 if SPEC is None or SPEC.loader is None:
     raise RuntimeError(f"无法加载模块: {MODULE_PATH}")
@@ -163,3 +163,4 @@ def test_scheduler_comparison_and_markdown_report():
     assert "Load Balance Report" in markdown
     assert "dynamic_queue" in markdown
     assert "rank0/gpu0" in markdown
+

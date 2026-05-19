@@ -1,4 +1,4 @@
-"""
+﻿"""
 测试 labelme_statistics 模块的核心功能
 覆盖 LabelStatistics, LabelMeLabelStatistics, statistics_labelme_labels
 """
@@ -11,7 +11,7 @@ from unittest import mock
 
 import pytest
 
-from labelme_tools.labelme_statistics import (
+from unsloth_finetune.data.labelme.labelme_statistics import (
     LabelMeLabelStatistics,
     LabelStatistics,
     statistics_labelme_labels,

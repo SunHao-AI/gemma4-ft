@@ -1,4 +1,4 @@
-"""
+﻿"""
 测试 labelme_cleaner 模块的核心功能
 覆盖 ValidationStatus, ValidationResult, CleaningResult, LabelMeCleaner 的验证和去重逻辑
 """
@@ -11,7 +11,7 @@ from unittest import mock
 
 import pytest
 
-from labelme_tools.labelme_cleaner import (
+from unsloth_finetune.data.labelme.labelme_cleaner import (
     CleaningResult,
     LabelMeCleaner,
     ValidationStatus,

@@ -1,9 +1,9 @@
-import logging
+﻿import logging
 import os
 import importlib.util
 from pathlib import Path
 
-from gemma4_core.runtime import (
+from unsloth_finetune.core.runtime import (
     TimezoneAwareFormatter,
     configure_unsloth_compile_cache,
     format_log_timestamp,
@@ -11,7 +11,7 @@ from gemma4_core.runtime import (
 )
 
 
-_ADAPTER_UTILS_PATH = Path(__file__).resolve().parents[1] / "distributed_training" / "adapter_utils.py"
+_ADAPTER_UTILS_PATH = Path(__file__).resolve().parents[1] / "src" / "unsloth_finetune" / "training" / "distributed" / "adapter_utils.py"
 _ADAPTER_UTILS_SPEC = importlib.util.spec_from_file_location("test_adapter_utils_module", _ADAPTER_UTILS_PATH)
 _ADAPTER_UTILS = importlib.util.module_from_spec(_ADAPTER_UTILS_SPEC)
 assert _ADAPTER_UTILS_SPEC.loader is not None
@@ -92,3 +92,4 @@ def test_extract_target_modules_from_state_keys_strips_peft_prefix():
         "model.layers.0.self_attn.q_proj",
         "model.layers.1.mlp.up_proj",
     ]
+

@@ -13,3 +13,7 @@ dist/
 tmp_notebook_cells/
 tmp_notebook_cells2/
 AGENTS.md
+*.egg-info/
+unsloth_compiled_cache/
+results/
+flash_attention_env_report.json

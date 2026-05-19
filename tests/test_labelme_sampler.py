@@ -1,4 +1,4 @@
-"""
+﻿"""
 测试 labelme_sampler 模块的核心功能
 覆盖 SelectionMode, ImageLabelInfo, SelectionResult, BalancedSelectionResult, LabelMeSampler
 """
@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from labelme_tools.labelme_sampler import (
+from unsloth_finetune.data.labelme.labelme_sampler import (
     BalancedSelectionResult,
     ImageLabelInfo,
     LabelMeSampler,

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -16,32 +16,41 @@ def prescan_label_statistics(source_dir: Path, max_workers: int = 4) -> Dict[str
     local_image_files = 0
     json_files = list(source_dir.rglob("*.json"))
 
-    def scan_file(json_file: Path) -> list[str]:
-        nonlocal total_files, skipped_files, image_url_files, local_image_files
+    def scan_file(json_file: Path) -> Dict[str, Any]:
+        empty_result = {
+            "scanned_files": 0,
+            "skipped_files": 0,
+            "image_url_files": 0,
+            "local_image_files": 0,
+            "labels": [],
+        }
         try:
             data = parse_json_file(json_file)
             if data is None:
-                skipped_files += 1
-                return []
+                return {**empty_result, "skipped_files": 1}
 
             shapes = data.get("shapes", [])
             labels = [shape.get("label", "unknown") for shape in shapes if isinstance(shape, dict)]
-            total_files += 1
 
-            if data.get("imageUrl"):
-                image_url_files += 1
-            elif data.get("imagePath"):
-                local_image_files += 1
-            return labels
+            return {
+                "scanned_files": 1,
+                "skipped_files": 0,
+                "image_url_files": 1 if data.get("imageUrl") else 0,
+                "local_image_files": 1 if (not data.get("imageUrl") and data.get("imagePath")) else 0,
+                "labels": labels,
+            }
         except Exception:
-            skipped_files += 1
-            return []
+            return {**empty_result, "skipped_files": 1}
 
     all_labels: list[str] = []
     progress_bar = create_progress_bar(total=len(json_files), desc="Label预扫描", unit="文件")
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        for labels in executor.map(scan_file, json_files):
-            all_labels.extend(labels)
+        for result in executor.map(scan_file, json_files):
+            total_files += result["scanned_files"]
+            skipped_files += result["skipped_files"]
+            image_url_files += result["image_url_files"]
+            local_image_files += result["local_image_files"]
+            all_labels.extend(result["labels"])
             if progress_bar:
                 progress_bar.update(1)
     if progress_bar:
