@@ -34,6 +34,9 @@
   - NCCL P2P通信优化 (A6000 NVLink)
   - GPU显存/利用率实时监控
 """
+# Unsloth 必须在所有其他导入之前导入以确保优化生效
+import unsloth  # noqa: F401
+
 import gc
 import json
 import logging
@@ -70,7 +73,6 @@ NOTEBOOK_DIR = resolve_notebook_dir(
 )
 UNSLOTH_CACHE_DIR = configure_unsloth_compile_cache(NOTEBOOK_DIR)
 
-# Unsloth 必须在 transformers/peft 之前导入以确保优化生效
 from unsloth import FastVisionModel
 from transformers import TrainerCallback
 

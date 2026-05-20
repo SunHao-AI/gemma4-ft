@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Unsloth 必须在所有其他导入之前导入以确保优化生效
+import unsloth  # noqa: F401
+
 import argparse
 import gc
 import json
@@ -40,7 +43,6 @@ NOTEBOOK_DIR = resolve_notebook_dir(
 )
 UNSLOTH_CACHE_DIR = configure_unsloth_compile_cache(NOTEBOOK_DIR)
 
-# Import Unsloth after pinning the compile cache, but before modules that may load transformers / peft.
 from unsloth import FastVisionModel
 
 INFERENCE_TEMPERATURE = 0.7

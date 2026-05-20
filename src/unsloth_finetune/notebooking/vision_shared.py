@@ -1,5 +1,8 @@
 ﻿from __future__ import annotations
 
+# Unsloth 必须在所有其他导入之前导入以确保优化生效
+import unsloth  # noqa: F401
+
 import gc
 import json
 import os
