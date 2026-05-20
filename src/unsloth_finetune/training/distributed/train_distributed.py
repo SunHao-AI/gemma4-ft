@@ -63,7 +63,6 @@ from unsloth_finetune.core.runtime import (
     get_env_value,
     resolve_notebook_dir,
 )
-from transformers import TrainerCallback
 
 NOTEBOOK_DIR = resolve_notebook_dir(
     cwd=Path.cwd(),
@@ -71,7 +70,9 @@ NOTEBOOK_DIR = resolve_notebook_dir(
 )
 UNSLOTH_CACHE_DIR = configure_unsloth_compile_cache(NOTEBOOK_DIR)
 
+# Unsloth 必须在 transformers/peft 之前导入以确保优化生效
 from unsloth import FastVisionModel
+from transformers import TrainerCallback
 
 configure_root_logging(level=logging.INFO if int(os.environ.get("LOCAL_RANK", 0)) == 0 else logging.WARNING)
 logger = logging.getLogger(__name__)
@@ -209,6 +210,13 @@ def auto_tune_runtime(args, world_size: int) -> dict:
         args.dataloader_persistent_workers = False
     elif args.dataloader_prefetch_factor is None:
         args.dataloader_prefetch_factor = 4 if args.vision_mode else 2
+
+    # 多模态模型(vision_mode)包含多种子模块(audio_tower, vision_encoder等)
+    # 训练数据可能只使用部分模态，导致某些参数未参与loss计算
+    # 因此需要启用find_unused_parameters以允许DDP正确处理梯度同步
+    if args.vision_mode and not args.ddp_find_unused_parameters:
+        args.ddp_find_unused_parameters = True
+        logger.info("vision_mode启用: 自动设置 ddp_find_unused_parameters=True (多模态模型可能包含未使用参数)")
 
     if args.image_load_mode == "batch" and args.image_batch_size is None:
         prefetch = args.dataloader_prefetch_factor or 2
