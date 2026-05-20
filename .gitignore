@@ -18,3 +18,5 @@ unsloth_compiled_cache/
 results/
 flash_attention_env_report.json
 .claude/
+data/*
+models/*
