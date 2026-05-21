@@ -1312,7 +1312,7 @@ def run_model_round_dynamic(
             "state": "failed",
         }
 
-    detector = ObjectDetector(loader)
+    detector = ObjectDetector(loader, prompt_builder=prompt_builder, coord_order=coord_order)
     results: List[Dict[str, Any]] = []
     processed = 0
     failed = 0
@@ -1555,6 +1555,8 @@ def parse_args():
     parser.add_argument("--partition_strategy", choices=("contiguous", "round_robin"), default="round_robin")
     parser.add_argument("--queue_batch_size", type=int, default=None)
     parser.add_argument("--prompt_format", choices=("normalized_xyxy", "legacy_1000x1000"), default="normalized_xyxy")
+    parser.add_argument("--coord_order", choices=("xyxy", "yxxy"), default=None,
+                        help="坐标顺序: xyxy 或 yxxy. 默认随 prompt_format 自动推导 (normalized_xyxy->xyxy, legacy->yxxy)")
     return parser.parse_args()
 
 
@@ -1574,6 +1576,9 @@ def main():
     else:  # legacy_1000x1000
         prompt_builder = None
         coord_order = "yxxy"
+    # CLI --coord_order overrides the prompt_format-derived default
+    if args.coord_order is not None:
+        coord_order = args.coord_order
 
     rank = None
     try:
