@@ -1,4 +1,4 @@
-﻿# Docker 训练与推理环境指南
+﻿﻿# Docker 训练与推理环境指南
 
 本文档提供一套将基于 Unsloth 的多模态微调与推理迁移到 Docker 容器内运行的完整流程（以 Gemma 4 等模型为示例）。目标是让宿主机只保留 NVIDIA Driver、Docker 和 GPU runtime，`conda`、`CUDA toolkit`、`nvcc`、`flash-attn`、训练依赖和虚拟环境都放到容器内管理。
 

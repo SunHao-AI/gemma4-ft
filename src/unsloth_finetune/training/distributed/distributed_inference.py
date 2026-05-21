@@ -36,6 +36,13 @@ from unsloth_finetune.training.distributed.load_balancer import (
     render_scheduler_report_markdown,
 )
 from unsloth_finetune.training.distributed.adapter_utils import prepared_adapter_dir
+from unsloth_finetune.data.labelme.detection_format import (
+    DetectionPromptBuilder,
+    build_cn_normalized_detection_prompt,
+    build_en_normalized_detection_prompt,
+    build_en_normalized_detection_prompt,
+    parse_box_2d_json_ground_truth,
+)
 
 NOTEBOOK_DIR = resolve_notebook_dir(
     cwd=Path.cwd(),
@@ -359,7 +366,7 @@ class DatasetLoader:
         return records
 
     @staticmethod
-    def parse_ground_truth(record: Dict) -> List[Dict]:
+    def parse_ground_truth(record: Dict, coord_order: str = "yxxy") -> List[Dict]:
         metadata = record.get("metadata", {})
         img_width = metadata.get("image_width", 1000)
         img_height = metadata.get("image_height", 1000)
@@ -375,6 +382,18 @@ class DatasetLoader:
 
         if not assistant_text:
             return []
+
+        # Try box_2d_json format if metadata indicates it or text starts with '['
+        output_format = metadata.get("output_format", "labelme_text")
+        if output_format == "box_2d_json" or assistant_text.lstrip().startswith("["):
+            try:
+                box_2d_results = parse_box_2d_json_ground_truth(
+                    assistant_text, img_width, img_height, coord_order=coord_order
+                )
+                if box_2d_results:
+                    return box_2d_results
+            except Exception:
+                pass  # Fall through to legacy regex parsing
 
         pattern = r"-\s*(\S+)\s*:\s*\[\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\]"
         gt_bboxes = []
@@ -544,10 +563,17 @@ class ModelLoader:
 
 
 class ObjectDetector:
-    def __init__(self, model_loader: ModelLoader):
+    def __init__(self, model_loader: ModelLoader,
+                 prompt_builder: Optional[DetectionPromptBuilder] = None,
+                 coord_order: str = "yxxy"):
         self.model_loader = model_loader
+        self.prompt_builder = prompt_builder
+        self.coord_order = coord_order
 
     def _build_prompt(self, query: str) -> str:
+        if self.prompt_builder:
+            return self.prompt_builder(query)
+        # Legacy default: 1000x1000 y-first format
         return f"""Analyze this image carefully. {query}
 
 If the target is present, return only a JSON array with this schema:
@@ -647,7 +673,7 @@ If no target is found, return []"""
 
             response = self._decode_generated_responses(processor, inputs, outputs)[0]
             width, height = image.size
-            detections = self._parse_response(response, width, height)
+            detections = self._parse_response(response, width, height, coord_order=self.coord_order)
             return {"success": True, "raw_response": response, "detections": detections, "query": query}
         except Exception as exc:
             return {"error": str(exc), "success": False}
@@ -688,7 +714,7 @@ If no target is found, return []"""
                 responses = self._decode_generated_responses(processor, inputs, outputs)
                 for image, query, response in zip(image_batch, query_batch, responses):
                     width, height = image.size
-                    detections = self._parse_response(response, width, height)
+                    detections = self._parse_response(response, width, height, coord_order=self.coord_order)
                     results.append(
                         {
                             "success": True,
@@ -705,7 +731,8 @@ If no target is found, return []"""
                     results.append(single)
         return results
 
-    def _parse_response(self, response: str, width: int, height: int) -> List[Dict[str, Any]]:
+    def _parse_response(self, response: str, width: int, height: int,
+                        coord_order: str = "yxxy") -> List[Dict[str, Any]]:
         detections = []
         scale_1000_x = width / 1000.0
         scale_1000_y = height / 1000.0
@@ -714,16 +741,28 @@ If no target is found, return []"""
             return all(0 <= v <= 1 for v in coords)
 
         def convert_coords(coords: list) -> Tuple[int, int, int, int]:
-            if is_normalized(coords):
-                x1 = int(coords[1] * width)
-                y1 = int(coords[0] * height)
-                x2 = int(coords[3] * width)
-                y2 = int(coords[2] * height)
-            else:
-                x1 = int(coords[1] * scale_1000_x)
-                y1 = int(coords[0] * scale_1000_y)
-                x2 = int(coords[3] * scale_1000_x)
-                y2 = int(coords[2] * scale_1000_y)
+            if coord_order == "xyxy":
+                if is_normalized(coords):
+                    x1 = int(coords[0] * width)
+                    y1 = int(coords[1] * height)
+                    x2 = int(coords[2] * width)
+                    y2 = int(coords[3] * height)
+                else:
+                    x1 = int(coords[0])
+                    y1 = int(coords[1])
+                    x2 = int(coords[2])
+                    y2 = int(coords[3])
+            else:  # yxxy legacy - keep existing logic
+                if is_normalized(coords):
+                    x1 = int(coords[1] * width)
+                    y1 = int(coords[0] * height)
+                    x2 = int(coords[3] * width)
+                    y2 = int(coords[2] * height)
+                else:
+                    x1 = int(coords[1] * scale_1000_x)
+                    y1 = int(coords[0] * scale_1000_y)
+                    x2 = int(coords[3] * scale_1000_x)
+                    y2 = int(coords[2] * scale_1000_y)
             return x1, y1, x2, y2
 
         def sanitize_box(x1: int, y1: int, x2: int, y2: int):
@@ -1083,6 +1122,8 @@ def run_model_round(
     rank: int,
     local_rank: int,
     physical_gpu: int,
+    prompt_builder: Optional[DetectionPromptBuilder] = None,
+    coord_order: str = "yxxy",
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     worker_start = time.time()
     load_start = time.time()
@@ -1109,7 +1150,7 @@ def run_model_round(
             "state": "failed",
         }
 
-    detector = ObjectDetector(loader)
+    detector = ObjectDetector(loader, prompt_builder=prompt_builder, coord_order=coord_order)
     results = []
     processed = 0
     failed = 0
@@ -1134,7 +1175,7 @@ def run_model_round(
                 try:
                     image_path = DatasetLoader.extract_image_path(record)
                     query = DatasetLoader.extract_query(record)
-                    ground_truth = DatasetLoader.parse_ground_truth(record)
+                    ground_truth = DatasetLoader.parse_ground_truth(record, coord_order=coord_order)
                     image = DatasetLoader.load_image(image_path)
                     if image is None:
                         failed += 1
@@ -1230,6 +1271,8 @@ def run_model_round_dynamic(
     local_rank: int,
     physical_gpu: int,
     result_dir: Path,
+    prompt_builder: Optional[DetectionPromptBuilder] = None,
+    coord_order: str = "yxxy",
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     queue_db_path = get_queue_db_path(result_dir, model_type)
     task_queue = SQLiteTaskQueue(queue_db_path)
@@ -1335,7 +1378,7 @@ def run_model_round_dynamic(
                 try:
                     image_path = DatasetLoader.extract_image_path(record)
                     query = DatasetLoader.extract_query(record)
-                    ground_truth = DatasetLoader.parse_ground_truth(record)
+                    ground_truth = DatasetLoader.parse_ground_truth(record, coord_order=coord_order)
                     image = DatasetLoader.load_image(image_path)
                     if image is None:
                         failed += 1
@@ -1511,6 +1554,7 @@ def parse_args():
     parser.add_argument("--scheduler_mode", choices=("static_partition", "dynamic_queue"), default="static_partition")
     parser.add_argument("--partition_strategy", choices=("contiguous", "round_robin"), default="round_robin")
     parser.add_argument("--queue_batch_size", type=int, default=None)
+    parser.add_argument("--prompt_format", choices=("normalized_xyxy", "legacy_1000x1000"), default="normalized_xyxy")
     return parser.parse_args()
 
 
@@ -1522,6 +1566,14 @@ def main():
     INFERENCE_TEMPERATURE = args.temperature
     INFERENCE_TOP_P = args.top_p
     INFERENCE_MAX_NEW_TOKENS = args.max_new_tokens
+
+    # Resolve prompt builder and coord order from prompt_format
+    if args.prompt_format == "normalized_xyxy":
+        prompt_builder = build_cn_normalized_detection_prompt
+        coord_order = "xyxy"
+    else:  # legacy_1000x1000
+        prompt_builder = None
+        coord_order = "yxxy"
 
     rank = None
     try:
@@ -1580,9 +1632,12 @@ def main():
                 local_rank,
                 physical_gpu,
                 result_dir,
+                prompt_builder=prompt_builder,
+                coord_order=coord_order,
             )
         else:
-            ft_results, ft_stats = run_model_round("finetuned", partition_records, args, rank, local_rank, physical_gpu)
+            ft_results, ft_stats = run_model_round("finetuned", partition_records, args, rank, local_rank, physical_gpu,
+                                                              prompt_builder=prompt_builder, coord_order=coord_order)
         barrier()
         if args.scheduler_mode == "dynamic_queue" and rank == 0:
             ft_snapshot = validate_dynamic_queue_round(
@@ -1641,9 +1696,12 @@ def main():
                 local_rank,
                 physical_gpu,
                 result_dir,
+                prompt_builder=prompt_builder,
+                coord_order=coord_order,
             )
         else:
-            base_results, base_stats = run_model_round("base", partition_records, args, rank, local_rank, physical_gpu)
+            base_results, base_stats = run_model_round("base", partition_records, args, rank, local_rank, physical_gpu,
+                                                          prompt_builder=prompt_builder, coord_order=coord_order)
         barrier()
         if args.scheduler_mode == "dynamic_queue" and rank == 0:
             base_snapshot = validate_dynamic_queue_round(

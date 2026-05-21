@@ -101,6 +101,7 @@ class ConversionResult:
     val_ratio: float = 0.1
     test_ratio: float = 0.1
     random_seed: Optional[int] = None
+    output_format: str = "labelme_text"
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
 
@@ -131,6 +132,7 @@ class ConversionResult:
             "val_ratio": self.val_ratio,
             "test_ratio": self.test_ratio,
             "random_seed": self.random_seed,
+            "output_format": self.output_format,
             "train_split": self.train_split.to_dict() if self.train_split else None,
             "val_split": self.val_split.to_dict() if self.val_split else None,
             "test_split": self.test_split.to_dict() if self.test_split else None,
@@ -161,6 +163,7 @@ class LabelMeConverter:
         per_category_mode: bool = False,
         category_instruction_template: str = "请分析这张图像，识别并定位其中的 {category}。",
         selected_files: Optional[List[str]] = None,
+        output_format: str = "labelme_text",
     ):
         """
         初始化转换工具
@@ -184,7 +187,11 @@ class LabelMeConverter:
             category_instruction_template: 类别指令模板，使用{category}占位符
             selected_files: 仅转换指定的JSON文件路径列表（如来自均衡选择结果），
                 为None时则扫描source_dir下所有JSON文件
+            output_format: 输出格式模式，"labelme_text"(旧格式) 或 "box_2d_json"(新格式，推荐)
         """
+        from .detection_format import OutputFormat
+
+        self.output_format = OutputFormat(output_format)
         self.source_dir = Path(source_dir)
         self.output_dir = Path(output_dir)
         self.selected_files = selected_files
@@ -337,6 +344,46 @@ class LabelMeConverter:
 
         return [{"role": "user", "content": user_content}, {"role": "assistant", "content": assistant_content}]
 
+    def _generate_box_2d_json_messages(self, bboxes: List[BoundingBox]) -> List[Dict]:
+        """Generate conversation messages in box_2d_json format (aligned with inference)."""
+        from .detection_format import build_box_2d_json_response
+
+        user_content = [{"type": "image"}, {"type": "text", "text": self.instruction_text}]
+
+        bbox_dicts = [
+            {"x_min": bbox.x_min, "y_min": bbox.y_min,
+             "x_max": bbox.x_max, "y_max": bbox.y_max, "label": bbox.label}
+            for bbox in bboxes
+        ]
+        response_text = build_box_2d_json_response(bbox_dicts)
+
+        assistant_content = [{"type": "text", "text": response_text}]
+        return [{"role": "user", "content": user_content}, {"role": "assistant", "content": assistant_content}]
+
+    def _generate_category_specific_box_2d_json_messages(
+        self, bboxes: List[BoundingBox], target_category: str
+    ) -> List[Dict]:
+        """Generate per-category conversation messages in box_2d_json format."""
+        from .detection_format import build_box_2d_json_response
+
+        instruction_text = self.category_instruction_template.format(category=target_category)
+        user_content = [{"type": "image"}, {"type": "text", "text": instruction_text}]
+
+        category_bboxes = [bbox for bbox in bboxes if bbox.label == target_category]
+
+        if not category_bboxes:
+            response_text = "[]"
+        else:
+            bbox_dicts = [
+                {"x_min": bbox.x_min, "y_min": bbox.y_min,
+                 "x_max": bbox.x_max, "y_max": bbox.y_max, "label": bbox.label}
+                for bbox in category_bboxes
+            ]
+            response_text = build_box_2d_json_response(bbox_dicts)
+
+        assistant_content = [{"type": "text", "text": response_text}]
+        return [{"role": "user", "content": user_content}, {"role": "assistant", "content": assistant_content}]
+
     def _convert_single_file(self, json_path: Path, global_list: List[ConversionRecord], lock: threading.Lock, counter: Dict[str, int], counter_lock: threading.Lock) -> Optional[ConversionRecord]:
         """转换单个JSON文件"""
         data = parse_json_file(json_path, self.logger)
@@ -392,12 +439,17 @@ class LabelMeConverter:
                 counter["skipped"] += 1
             return None
 
+        from .detection_format import OutputFormat
+
         records_to_add = []
         if self.per_category_mode:
             unique_categories = set(bbox.label for bbox in bounding_boxes)
             for category in unique_categories:
                 category_bboxes = [bbox for bbox in bounding_boxes if bbox.label == category]
-                conversation_messages = self._generate_category_specific_messages(bounding_boxes, category)
+                if self.output_format == OutputFormat.BOX_2D_JSON:
+                    conversation_messages = self._generate_category_specific_box_2d_json_messages(bounding_boxes, category)
+                else:
+                    conversation_messages = self._generate_category_specific_messages(bounding_boxes, category)
                 record = ConversionRecord(
                     messages=conversation_messages,
                     images=[str(image_file) if image_file else image_path_str],
@@ -409,17 +461,21 @@ class LabelMeConverter:
                         "labels": [category],
                         "target_category": category,
                         "total_categories_in_image": len(unique_categories),
+                        "output_format": self.output_format.value,
                     },
                     json_path=str(json_path),
                     image_path=str(image_file) if image_file else image_path_str,
                 )
                 records_to_add.append(record)
         else:
-            conversation_messages = self._generate_conversation_messages(bounding_boxes)
+            if self.output_format == OutputFormat.BOX_2D_JSON:
+                conversation_messages = self._generate_box_2d_json_messages(bounding_boxes)
+            else:
+                conversation_messages = self._generate_conversation_messages(bounding_boxes)
             record = ConversionRecord(
                 messages=conversation_messages,
                 images=[str(image_file) if image_file else image_path_str],
-                metadata={"json_path": str(json_path), "image_width": image_width, "image_height": image_height, "num_objects": len(bounding_boxes), "labels": [bbox.label for bbox in bounding_boxes]},
+                metadata={"json_path": str(json_path), "image_width": image_width, "image_height": image_height, "num_objects": len(bounding_boxes), "labels": [bbox.label for bbox in bounding_boxes], "output_format": self.output_format.value},
                 json_path=str(json_path),
                 image_path=str(image_file) if image_file else image_path_str,
             )
@@ -590,6 +646,7 @@ class LabelMeConverter:
             val_ratio=self.val_ratio,
             test_ratio=self.test_ratio,
             random_seed=self.random_seed,
+            output_format=self.output_format.value,
         )
         result.start_time = datetime.now()
 
@@ -710,6 +767,7 @@ def convert_to_unsloth_format(
     per_category_mode: bool = False,
     category_instruction_template: str = "请分析这张图像，识别并定位其中的 {category}。",
     selected_files: Optional[List[str]] = None,
+    output_format: str = "labelme_text",
 ) -> ConversionResult:
     """
     将LabelMe数据转换为Unsloth框架兼容格式
@@ -732,6 +790,7 @@ def convert_to_unsloth_format(
         category_instruction_template: 类别指令模板，使用{category}占位符
         selected_files: 仅转换指定的JSON文件路径列表（如来自均衡选择结果），
             为None时则扫描source_dir下所有JSON文件
+        output_format: 输出格式模式，"labelme_text"(旧格式) 或 "box_2d_json"(新格式，推荐)
 
     Returns:
         ConversionResult: 转换结果对象
@@ -767,6 +826,7 @@ def convert_to_unsloth_format(
         per_category_mode=per_category_mode,
         category_instruction_template=category_instruction_template,
         selected_files=selected_files,
+        output_format=output_format,
     )
 
     return converter.convert()
@@ -788,6 +848,8 @@ def main():
     parser.add_argument("--workers", "-w", type=int, default=4, help="最大线程数")
     parser.add_argument("--log", help="日志文件路径")
     parser.add_argument("--report", "-r", help="输出JSON报告路径")
+    parser.add_argument("--output-format", choices=["labelme_text", "box_2d_json"], default="labelme_text",
+                        help="输出格式模式: labelme_text(旧格式) 或 box_2d_json(新格式，推荐)")
 
     args = parser.parse_args()
 
@@ -818,6 +880,7 @@ def main():
         log_file=args.log,
         max_workers=args.workers,
         progress_callback=progress_callback,
+        output_format=args.output_format,
     )
 
     print("\n")

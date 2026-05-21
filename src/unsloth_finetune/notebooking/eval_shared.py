@@ -11,6 +11,8 @@ import numpy as np
 import requests
 from PIL import Image
 
+from unsloth_finetune.data.labelme.detection_format import parse_box_2d_json_ground_truth
+
 
 class IOUCalculator:
     @staticmethod
@@ -211,6 +213,17 @@ class DatasetLoader:
         if not assistant_text:
             return []
 
+        output_format = metadata.get("output_format", "labelme_text")
+
+        # Try box_2d_json format first
+        if output_format == "box_2d_json" or assistant_text.strip().startswith("["):
+            json_detections = parse_box_2d_json_ground_truth(
+                assistant_text, img_width, img_height, coord_order="xyxy"
+            )
+            if json_detections:
+                return json_detections
+
+        # Fall back to legacy regex
         pattern = r"-\s*(\S+)\s*:\s*\[\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\]"
         gt_bboxes = []
         for match in re.finditer(pattern, assistant_text):

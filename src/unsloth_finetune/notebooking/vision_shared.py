@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 # Unsloth 必须在所有其他导入之前导入以确保优化生效
 import unsloth  # noqa: F401
@@ -20,7 +20,12 @@ from PIL import Image, ImageDraw, ImageFont
 from unsloth_finetune.training.distributed.adapter_utils import prepared_adapter_dir
 
 
-DetectionPromptBuilder = Callable[[str], str]
+from unsloth_finetune.data.labelme.detection_format import (
+    DetectionPromptBuilder,
+    build_cn_normalized_detection_prompt,
+    build_en_normalized_detection_prompt,
+    parse_box_2d_json_ground_truth,
+)
 
 
 def configure_matplotlib_for_chinese(plt_module, font_manager=None, warn: bool = False) -> Optional[str]:
@@ -286,11 +291,13 @@ class ObjectDetector:
         prompt_builder: DetectionPromptBuilder = build_en_detection_prompt,
         temperature: float = 0.7,
         top_p: float = 0.9,
+        coord_order: str = "yxxy",
     ):
         self.model_loader = model_loader
         self.prompt_builder = prompt_builder
         self.temperature = float(temperature)
         self.top_p = float(top_p)
+        self.coord_order = coord_order
 
     def _resolve_model_device(self, model) -> torch.device:
         model_device = getattr(model, "device", None)
@@ -378,7 +385,7 @@ class ObjectDetector:
 
             response = self._decode_generated_responses(processor, inputs, outputs)[0]
             width, height = image.size
-            detections = self.parse_response(response, width, height)
+            detections = self.parse_response(response, width, height, coord_order=self.coord_order)
             return {
                 "success": True,
                 "raw_response": response,
@@ -424,7 +431,7 @@ class ObjectDetector:
                 responses = self._decode_generated_responses(processor, inputs, outputs)
                 for image, query, response in zip(image_batch, query_batch, responses):
                     width, height = image.size
-                    detections = self.parse_response(response, width, height)
+                    detections = self.parse_response(response, width, height, coord_order=self.coord_order)
                     results.append(
                         {
                             "success": True,
@@ -442,7 +449,7 @@ class ObjectDetector:
         return results
 
     @staticmethod
-    def parse_response(response: str, width: int, height: int) -> List[Dict[str, Any]]:
+    def parse_response(response: str, width: int, height: int, coord_order: str = "yxxy") -> List[Dict[str, Any]]:
         detections: List[Dict[str, Any]] = []
         scale_1000_x = width / 1000.0
         scale_1000_y = height / 1000.0
@@ -451,16 +458,28 @@ class ObjectDetector:
             return all(0 <= value <= 1 for value in coords)
 
         def convert_coords(coords: list) -> Tuple[int, int, int, int]:
-            if is_normalized(coords):
-                x1 = int(coords[1] * width)
-                y1 = int(coords[0] * height)
-                x2 = int(coords[3] * width)
-                y2 = int(coords[2] * height)
-            else:
-                x1 = int(coords[1] * scale_1000_x)
-                y1 = int(coords[0] * scale_1000_y)
-                x2 = int(coords[3] * scale_1000_x)
-                y2 = int(coords[2] * scale_1000_y)
+            if coord_order == "xyxy":
+                if is_normalized(coords):
+                    x1 = int(coords[0] * width)
+                    y1 = int(coords[1] * height)
+                    x2 = int(coords[2] * width)
+                    y2 = int(coords[3] * height)
+                else:
+                    x1 = int(coords[0])
+                    y1 = int(coords[1])
+                    x2 = int(coords[2])
+                    y2 = int(coords[3])
+            else:  # yxxy legacy
+                if is_normalized(coords):
+                    x1 = int(coords[1] * width)
+                    y1 = int(coords[0] * height)
+                    x2 = int(coords[3] * width)
+                    y2 = int(coords[2] * height)
+                else:
+                    x1 = int(coords[1] * scale_1000_x)
+                    y1 = int(coords[0] * scale_1000_y)
+                    x2 = int(coords[3] * scale_1000_x)
+                    y2 = int(coords[2] * scale_1000_y)
             return x1, y1, x2, y2
 
         def sanitize_box(x1: int, y1: int, x2: int, y2: int):
@@ -730,6 +749,7 @@ class ObjectDetectionPipeline:
         prompt_builder: DetectionPromptBuilder = build_cn_detection_prompt,
         temperature: float = 0.7,
         top_p: float = 0.9,
+        coord_order: str = "yxxy",
     ):
         self.model_loader = ModelLoader(model_config)
         self.image_loader = ImageLoader()
@@ -739,6 +759,7 @@ class ObjectDetectionPipeline:
             prompt_builder=prompt_builder,
             temperature=temperature,
             top_p=top_p,
+            coord_order=coord_order,
         )
         self._initialized = False
 

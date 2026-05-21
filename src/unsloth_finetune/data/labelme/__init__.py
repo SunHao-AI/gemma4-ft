@@ -25,6 +25,16 @@ from .labelme_converter import (
     ConversionResult,
     DatasetSplit,
 )
+from .detection_format import (
+    OutputFormat,
+    DetectionFormatSpec,
+    FORMAT_SPECS,
+    build_box_2d_json_response,
+    build_cn_normalized_detection_prompt,
+    build_en_normalized_detection_prompt,
+    parse_box_2d_json_ground_truth,
+    DetectionPromptBuilder,
+)
 from .labelme_sampler import (
     select_balanced_samples,
     BalancedSelectionResult,
@@ -58,6 +68,15 @@ __all__ = [
     "convert_to_unsloth_format",
     "ConversionResult",
     "DatasetSplit",
+    # Detection Format
+    "OutputFormat",
+    "DetectionFormatSpec",
+    "FORMAT_SPECS",
+    "build_box_2d_json_response",
+    "build_cn_normalized_detection_prompt",
+    "build_en_normalized_detection_prompt",
+    "parse_box_2d_json_ground_truth",
+    "DetectionPromptBuilder",
     # Sampling
     "select_balanced_samples",
     "BalancedSelectionResult",
