@@ -40,7 +40,6 @@ from unsloth_finetune.data.labelme.detection_format import (
     DetectionPromptBuilder,
     build_cn_normalized_detection_prompt,
     build_en_normalized_detection_prompt,
-    build_en_normalized_detection_prompt,
     parse_box_2d_json_ground_truth,
 )
 
@@ -256,6 +255,10 @@ class IOUCalculator:
 
 class MetricsCalculator:
     @staticmethod
+    def _normalize_label(label: Any) -> str:
+        return str(label or "").strip().lower()
+
+    @staticmethod
     def compute_sample_metrics(
         detections: List[Dict],
         ground_truth: List[Dict],
@@ -286,7 +289,7 @@ class MetricsCalculator:
 
         if not detections:
             return {
-                "precision": 1.0,
+                "precision": 0.0,
                 "recall": 0.0,
                 "f1": 0.0,
                 "num_det": 0,
@@ -302,10 +305,14 @@ class MetricsCalculator:
 
         for i, det in enumerate(detections):
             det_bbox = det.get("bbox", [0, 0, 0, 0])
+            det_label = MetricsCalculator._normalize_label(det.get("label"))
             best_iou = 0.0
             best_j = -1
             for j, gt in enumerate(ground_truth):
                 if j in matched_gt:
+                    continue
+                gt_label = MetricsCalculator._normalize_label(gt.get("label"))
+                if det_label != gt_label:
                     continue
                 gt_bbox = gt.get("bbox", [0, 0, 0, 0])
                 iou = IOUCalculator.calculate_iou(det_bbox, gt_bbox)
@@ -571,10 +578,25 @@ class ObjectDetector:
         self.coord_order = coord_order
 
     def _build_prompt(self, query: str) -> str:
+        query_text = str(query or "").strip()
+        if not query_text:
+            return query_text
+
+        # 训练数据里的 query 已经是完整自然语言指令时，评估直接复用，
+        # 避免再套一层模板造成“请分析这张图像，请分析这张图片...”的口径漂移。
+        if (
+            "识别并定位其中的" in query_text
+            or query_text.startswith("请分析这张图像")
+            or query_text.startswith("请分析这张图片")
+            or query_text.startswith("Analyze this image carefully")
+            or "\"box_2d\"" in query_text
+        ):
+            return query_text
+
         if self.prompt_builder:
-            return self.prompt_builder(query)
+            return self.prompt_builder(query_text)
         # Legacy default: 1000x1000 y-first format
-        return f"""Analyze this image carefully. {query}
+        return f"""Analyze this image carefully. {query_text}
 
 If the target is present, return only a JSON array with this schema:
 [

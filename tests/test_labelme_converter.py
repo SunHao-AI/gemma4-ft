@@ -1,4 +1,4 @@
-﻿"""
+"""
 测试 labelme_converter 模块的核心功能
 覆盖 BoundingBox, ConversionRecord, DatasetSplit, ConversionResult, LabelMeConverter
 """
@@ -350,6 +350,64 @@ class TestLabelMeConverterInternal:
         assert len(val) == 1
         assert len(test) == 1
 
+    def test_split_dataset_keeps_same_image_in_single_split(self, converter):
+        records = [
+            ConversionRecord(
+                messages=[],
+                images=["/path/shared.jpg"],
+                metadata={"num_objects": 1, "labels": ["cat"]},
+                json_path="/path/shared.json",
+                image_path="/path/shared.jpg",
+            ),
+            ConversionRecord(
+                messages=[],
+                images=["/path/shared.jpg"],
+                metadata={"num_objects": 1, "labels": ["dog"]},
+                json_path="/path/shared.json",
+                image_path="/path/shared.jpg",
+            ),
+            ConversionRecord(
+                messages=[],
+                images=["/path/other.jpg"],
+                metadata={"num_objects": 1, "labels": ["bird"]},
+                json_path="/path/other.json",
+                image_path="/path/other.jpg",
+            ),
+        ]
+
+        train, val, test = converter._split_dataset(records)
+        memberships = {}
+        for split_name, split_records in (("train", train), ("val", val), ("test", test)):
+            for record in split_records:
+                memberships.setdefault(record.image_path, set()).add(split_name)
+
+        assert len(memberships["/path/shared.jpg"]) == 1
+
+    def test_save_split_counts_unique_images(self, converter, tmp_path):
+        converter.output_dir = tmp_path
+        records = [
+            ConversionRecord(
+                messages=[],
+                images=["/path/shared.jpg"],
+                metadata={"num_objects": 1, "labels": ["cat"]},
+                json_path="/path/shared.json",
+                image_path="/path/shared.jpg",
+            ),
+            ConversionRecord(
+                messages=[],
+                images=["/path/shared.jpg"],
+                metadata={"num_objects": 2, "labels": ["dog"]},
+                json_path="/path/shared.json",
+                image_path="/path/shared.jpg",
+            ),
+        ]
+
+        split = converter._save_split(records, "train")
+
+        assert split.total_records == 2
+        assert split.total_images == 1
+        assert split.total_objects == 3
+
 
 # ============================================================
 # LabelMeConverter 转换流程测试
@@ -397,6 +455,7 @@ class TestLabelMeConverterFlow:
         assert result.converted_count > 0
         assert result.train_split is not None
         assert result.train_split.output_path is not None
+        assert (output_dir / "valid.jsonl").exists()
 
     def test_convert_with_validation(self, converter_dir):
         source_dir, output_dir = converter_dir

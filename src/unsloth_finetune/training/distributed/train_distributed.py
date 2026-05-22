@@ -586,6 +586,30 @@ def load_text_data(data_path, tokenizer):
     return dataset
 
 
+def validate_training_configuration(config, effective_lr: float, world_size: int) -> None:
+    """在真正加载模型前校验关键训练超参数，尽早阻断明显异常配置。"""
+    if world_size <= 1:
+        return
+
+    if config.lr_scaling != "none":
+        logger.info(
+            "学习率缩放校验: base_lr=%s, effective_lr=%s, strategy=%s, world_size=%s",
+            config.learning_rate,
+            effective_lr,
+            config.lr_scaling,
+            world_size,
+        )
+
+    # 多 GPU 视觉 LoRA 训练下，过高 effective LR 往往意味着发生了双重缩放。
+    if config.vision_mode and effective_lr > 5e-4:
+        raise ValueError(
+            "effective_lr 过高，疑似发生学习率重复缩放。"
+            f"当前 base_lr={config.learning_rate}, effective_lr={effective_lr}, "
+            f"world_size={world_size}, lr_scaling={config.lr_scaling}。"
+            "请向训练脚本传入未缩放的 base learning rate。"
+        )
+
+
 def main():
     args = parse_args()
     image_size = resolve_image_size(args)
@@ -597,6 +621,7 @@ def main():
 
     effective_lr = config.effective_lr
     effective_batch = config.effective_global_batch
+    validate_training_configuration(config, effective_lr, world_size)
 
     if is_main_process():
         print(config.summary())

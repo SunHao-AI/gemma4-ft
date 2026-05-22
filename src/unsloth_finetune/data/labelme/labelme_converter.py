@@ -214,8 +214,9 @@ class LabelMeConverter:
         if random_seed is not None:
             random.seed(random_seed)
 
-        if train_ratio + val_ratio + test_ratio != 1.0:
-            self.logger.warning(f"数据集划分比例之和不为1.0: {train_ratio + val_ratio + test_ratio}")
+        ratio_sum = train_ratio + val_ratio + test_ratio
+        if abs(ratio_sum - 1.0) > 1e-8:
+            self.logger.warning(f"数据集划分比例之和不为1.0: {ratio_sum}")
 
     def _polygon_to_bbox(self, points: List[List[float]], label: str) -> BoundingBox:
         """多边形转换为边界框"""
@@ -489,18 +490,46 @@ class LabelMeConverter:
 
         return records_to_add[0] if records_to_add else None
 
+    @staticmethod
+    def _get_record_image_key(record: ConversionRecord) -> str:
+        """返回用于图片级划分的稳定主键。"""
+        if record.image_path:
+            return record.image_path
+        if record.images:
+            return record.images[0]
+        if record.json_path:
+            return record.json_path
+        return json_dumps_str(record.to_dict())
+
     def _split_dataset(self, records: List[ConversionRecord]) -> Tuple[List[ConversionRecord], List[ConversionRecord], List[ConversionRecord]]:
-        """划分数据集"""
-        shuffled_records = records.copy()
-        random.shuffle(shuffled_records)
+        """按图片级别划分数据集，避免同一图片跨 split 泄漏。"""
+        image_groups: Dict[str, List[ConversionRecord]] = {}
+        for record in records:
+            image_key = self._get_record_image_key(record)
+            image_groups.setdefault(image_key, []).append(record)
 
-        total = len(shuffled_records)
-        train_end = int(total * self.train_ratio)
-        val_end = train_end + int(total * self.val_ratio)
+        shuffled_groups = list(image_groups.values())
+        random.shuffle(shuffled_groups)
 
-        train_records = shuffled_records[:train_end]
-        val_records = shuffled_records[train_end:val_end]
-        test_records = shuffled_records[val_end:]
+        total_images = len(shuffled_groups)
+        train_end = int(total_images * self.train_ratio)
+        val_end = train_end + int(total_images * self.val_ratio)
+
+        train_groups = shuffled_groups[:train_end]
+        val_groups = shuffled_groups[train_end:val_end]
+        test_groups = shuffled_groups[val_end:]
+
+        train_records = [record for group in train_groups for record in group]
+        val_records = [record for group in val_groups for record in group]
+        test_records = [record for group in test_groups for record in group]
+
+        self.logger.info(
+            "按图片级划分完成: 总图片=%d, 训练=%d, 验证=%d, 测试=%d",
+            total_images,
+            len(train_groups),
+            len(val_groups),
+            len(test_groups),
+        )
 
         return train_records, val_records, test_records
 
@@ -535,12 +564,17 @@ class LabelMeConverter:
         split.output_path = str(output_file)
 
         label_counter = Counter()
+        unique_images = set()
         for record in records:
-            split.total_images += len(record.images)
+            if record.image_path:
+                unique_images.add(record.image_path)
+            for image_path in record.images:
+                unique_images.add(image_path)
             split.total_objects += record.metadata.get("num_objects", 0)
             for label in record.metadata.get("labels", []):
                 label_counter[label] += 1
 
+        split.total_images = len(unique_images)
         split.label_distribution = dict(label_counter)
         split.end_time = datetime.now()
 
@@ -549,6 +583,11 @@ class LabelMeConverter:
         self.logger.info(f"  图片数: {split.total_images}")
         self.logger.info(f"  对象数: {split.total_objects}")
         self.logger.info(f"  输出路径: {split.output_path}")
+
+        if split_name == "val":
+            valid_file = self.output_dir / "valid.jsonl"
+            valid_file.write_text(output_file.read_text(encoding="utf-8"), encoding="utf-8")
+            self.logger.info(f"  valid别名: {valid_file}")
 
         return split
 

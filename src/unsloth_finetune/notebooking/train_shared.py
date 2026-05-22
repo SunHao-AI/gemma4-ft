@@ -54,7 +54,7 @@ def resolve_latest_output_dir(
 
 def discover_eval_data_path(train_data_path: str | Path) -> tuple[Optional[str], Optional[str]]:
     data_path = Path(train_data_path).resolve()
-    candidate_names = ["test.jsonl", "valid.jsonl", data_path.name]
+    candidate_names = ["test.jsonl", "valid.jsonl", "val.jsonl", data_path.name]
     seen = set()
     for filename in candidate_names:
         if filename in seen:
