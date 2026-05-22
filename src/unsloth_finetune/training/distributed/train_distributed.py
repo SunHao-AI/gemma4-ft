@@ -142,6 +142,9 @@ def parse_args():
     parser.add_argument("--materialize_vision_dataset", action=argparse.BooleanOptionalAction, default=False, help="是否在训练前将视觉数据集整体物化为list")
     parser.add_argument("--image_width", type=int, default=512, help="视觉训练输入图片宽度")
     parser.add_argument("--image_height", type=int, default=512, help="视觉训练输入图片高度")
+    parser.add_argument("--attn_implementation", type=str, default=None,
+                        choices=["sdpa", "flash_attention_2", "eager"],
+                        help="注意力实现方式: sdpa(推荐), flash_attention_2, eager. None则由Unsloth自动选择")
 
     parser.add_argument("--gpu_monitor", action="store_true", default=True)
     parser.add_argument("--gpu_log_dir", type=str, default="gpu_logs")
@@ -345,6 +348,7 @@ def build_config_from_args(args) -> DistributedConfig:
             image_load_mode=args.image_load_mode,
             image_batch_size=args.image_batch_size,
             materialize_vision_dataset=args.materialize_vision_dataset,
+            attn_implementation=args.attn_implementation,
         )
 
     gpu_ids = None
@@ -396,6 +400,7 @@ def build_config_from_args(args) -> DistributedConfig:
             image_load_mode=args.image_load_mode,
             image_batch_size=args.image_batch_size,
             materialize_vision_dataset=args.materialize_vision_dataset,
+            attn_implementation=args.attn_implementation,
         )
 
     if args.device_map is not None or gpu_groups is not None:
@@ -429,6 +434,7 @@ def build_config_from_args(args) -> DistributedConfig:
             image_load_mode=args.image_load_mode,
             image_batch_size=args.image_batch_size,
             materialize_vision_dataset=args.materialize_vision_dataset,
+            attn_implementation=args.attn_implementation,
         )
 
     return create_ddp_config(
@@ -460,6 +466,7 @@ def build_config_from_args(args) -> DistributedConfig:
         image_load_mode=args.image_load_mode,
         image_batch_size=args.image_batch_size,
         materialize_vision_dataset=args.materialize_vision_dataset,
+        attn_implementation=args.attn_implementation,
     )
 
 
@@ -480,6 +487,7 @@ def setup_distributed():
 
         os.environ["NCCL_P2P_LEVEL"] = os.environ.get("NCCL_P2P_LEVEL", "SYS")
         os.environ["NCCL_IB_DISABLE"] = os.environ.get("NCCL_IB_DISABLE", "1")
+        os.environ["TORCH_NCCL_ASYNC_ERROR_HANDLING"] = os.environ.get("TORCH_NCCL_ASYNC_ERROR_HANDLING", "1")
 
         if rank == 0:
             logger.info("分布式训练初始化完成")

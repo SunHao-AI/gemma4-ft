@@ -135,24 +135,30 @@ class ModelLoader:
         try:
             print(f"正在加载模型: {self.config.get('name', 'Unknown')}")
             os.environ["UNSLOTH_DISABLE_STATISTICS"] = "1"
-            os.environ["TORCH_COMPILE_DISABLE"] = "1"
-            try:
-                import torch._dynamo
+            if not self.config.get("enable_compile", False):
+                os.environ["TORCH_COMPILE_DISABLE"] = "1"
+                try:
+                    import torch._dynamo
 
-                torch._dynamo.config.suppress_errors = True
-                torch._dynamo.reset()
-            except Exception:
-                pass
+                    torch._dynamo.config.suppress_errors = True
+                    torch._dynamo.reset()
+                except Exception:
+                    pass
 
             from unsloth import FastVisionModel
 
-            self.model, self.processor = FastVisionModel.from_pretrained(
-                model_name=self.config["base_model_path"],
-                max_seq_length=self.config["max_seq_length"],
-                load_in_4bit=self.config["load_in_4bit"],
-                device_map=self.config.get("device_map"),
-                disable_log_stats=True,
-            )
+            from_pretrained_kwargs = {
+                "model_name": self.config["base_model_path"],
+                "max_seq_length": self.config["max_seq_length"],
+                "load_in_4bit": self.config["load_in_4bit"],
+                "device_map": self.config.get("device_map"),
+                "disable_log_stats": True,
+            }
+            attn_impl = self.config.get("attn_implementation")
+            if attn_impl is not None:
+                from_pretrained_kwargs["attn_implementation"] = attn_impl
+
+            self.model, self.processor = FastVisionModel.from_pretrained(**from_pretrained_kwargs)
 
             lora_path = self.config.get("lora_adapter_path")
             if lora_path and os.path.exists(lora_path):

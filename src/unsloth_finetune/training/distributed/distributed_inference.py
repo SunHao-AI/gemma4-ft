@@ -508,23 +508,29 @@ class ModelLoader:
         try:
             write_verbose_console(f"Loading model: {self.config.get('name', 'Unknown')}")
             os.environ["UNSLOTH_DISABLE_STATISTICS"] = "1"
-            os.environ["TORCH_COMPILE_DISABLE"] = "1"
-            try:
-                import torch._dynamo
+            if not self.config.get("enable_compile", False):
+                os.environ["TORCH_COMPILE_DISABLE"] = "1"
+                try:
+                    import torch._dynamo
 
-                torch._dynamo.config.suppress_errors = True
-                torch._dynamo.reset()
-            except Exception:
-                pass
+                    torch._dynamo.config.suppress_errors = True
+                    torch._dynamo.reset()
+                except Exception:
+                    pass
+
+            from_pretrained_kwargs = {
+                "model_name": self.config["base_model_path"],
+                "max_seq_length": self.config["max_seq_length"],
+                "load_in_4bit": self.config["load_in_4bit"],
+                "device_map": self.config["device_map"],
+                "disable_log_stats": True,
+            }
+            attn_impl = self.config.get("attn_implementation")
+            if attn_impl is not None:
+                from_pretrained_kwargs["attn_implementation"] = attn_impl
 
             with quiet_library_output():
-                self.model, self.processor = FastVisionModel.from_pretrained(
-                    model_name=self.config["base_model_path"],
-                    max_seq_length=self.config["max_seq_length"],
-                    load_in_4bit=self.config["load_in_4bit"],
-                    device_map=self.config["device_map"],
-                    disable_log_stats=True,
-                )
+                self.model, self.processor = FastVisionModel.from_pretrained(**from_pretrained_kwargs)
 
                 lora_path = self.config.get("lora_adapter_path")
                 if lora_path and os.path.exists(lora_path):
@@ -1075,7 +1081,10 @@ def build_model_config(args, model_type: str, local_rank: int, physical_gpu: int
         "load_in_4bit": args.load_in_4bit,
         "device_map": {"": local_rank} if torch.cuda.is_available() else "cpu",
         "expected_device": expected_device,
+        "enable_compile": args.enable_compile,
     }
+    if args.attn_implementation is not None:
+        config["attn_implementation"] = args.attn_implementation
     if model_type == "finetuned" and args.lora_adapter_path:
         config["lora_adapter_path"] = args.lora_adapter_path
     return config
@@ -1579,6 +1588,11 @@ def parse_args():
     parser.add_argument("--prompt_format", choices=("normalized_xyxy", "legacy_1000x1000"), default="normalized_xyxy")
     parser.add_argument("--coord_order", choices=("xyxy", "yxxy"), default=None,
                         help="坐标顺序: xyxy 或 yxxy. 默认随 prompt_format 自动推导 (normalized_xyxy->xyxy, legacy->yxxy)")
+    parser.add_argument("--attn_implementation", type=str, default=None,
+                        choices=["sdpa", "flash_attention_2", "eager"],
+                        help="注意力实现方式: sdpa(推荐), flash_attention_2, eager. None则由Unsloth自动选择")
+    parser.add_argument("--enable_compile", action="store_true", default=False,
+                        help="启用torch.compile (默认禁用, 仅在推理场景且确认稳定时启用)")
     return parser.parse_args()
 
 

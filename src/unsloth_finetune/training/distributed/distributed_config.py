@@ -133,6 +133,7 @@ class DistributedConfig:
     image_load_mode: str = "lazy"
     image_batch_size: Optional[int] = None
     materialize_vision_dataset: bool = False
+    attn_implementation: Optional[str] = None
 
     logging_steps: int = 10
     save_steps: int = 300
@@ -241,6 +242,13 @@ class DistributedConfig:
 
         if self.cpu_threads_per_rank is not None and self.cpu_threads_per_rank < 1:
             raise ValueError("cpu_threads_per_rank必须>=1")
+
+        if self.attn_implementation is not None:
+            valid_attn = {"sdpa", "flash_attention_2", "eager"}
+            if self.attn_implementation not in valid_attn:
+                raise ValueError(
+                    f"attn_implementation必须是{valid_attn}之一, 当前: {self.attn_implementation}"
+                )
 
     def _resolve_mode(self):
         is_distributed_env = os.environ.get("LOCAL_RANK") is not None
@@ -489,6 +497,8 @@ class DistributedConfig:
             args.append(f"--image_batch_size {self.image_batch_size}")
         if self.materialize_vision_dataset:
             args.append("--materialize_vision_dataset")
+        if self.attn_implementation is not None:
+            args.append(f"--attn_implementation {self.attn_implementation}")
         if self.gpu_monitor:
             args.append("--gpu_monitor")
             args.append(f"--gpu_log_dir {self.gpu_log_dir}")
@@ -602,6 +612,9 @@ class DistributedConfig:
         if self.vision_mode:
             kwargs["disable_log_stats"] = True
 
+        if self.attn_implementation is not None:
+            kwargs["attn_implementation"] = self.attn_implementation
+
         return kwargs
 
     def summary(self) -> str:
@@ -641,6 +654,7 @@ class DistributedConfig:
         lines.append(f"  CPU线程/Rank: {self.cpu_threads_per_rank if self.cpu_threads_per_rank is not None else 'auto'}")
         lines.append(f"  图片加载模式: {self.image_load_mode}")
         lines.append(f"  数据集预物化: {self.materialize_vision_dataset}")
+        lines.append(f"  注意力实现: {self.attn_implementation or 'auto (Unsloth默认)'}")
 
         lines.append("")
         lines.append("硬件配置:")
@@ -696,6 +710,7 @@ class DistributedConfig:
             "image_load_mode": self.image_load_mode,
             "image_batch_size": self.image_batch_size,
             "materialize_vision_dataset": self.materialize_vision_dataset,
+            "attn_implementation": self.attn_implementation,
             "max_seq_length": self.max_seq_length,
             "num_epochs": self.num_epochs,
             "model_name": self.model_name,
