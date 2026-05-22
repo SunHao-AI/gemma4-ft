@@ -51,13 +51,13 @@ class TestDetectionFormatSpec:
         spec = DetectionFormatSpec(
             name="test",
             coordinate_order="xyxy",
-            coordinate_scale="normalized",
+            coordinate_scale="norm_1",
             response_structure="json_array",
             confidence_included=True,
         )
         assert spec.name == "test"
         assert spec.coordinate_order == "xyxy"
-        assert spec.coordinate_scale == "normalized"
+        assert spec.coordinate_scale == "norm_1"
         assert spec.response_structure == "json_array"
         assert spec.confidence_included is True
 
@@ -70,7 +70,7 @@ class TestDetectionFormatSpec:
         spec = FORMAT_SPECS[OutputFormat.LABELME_TEXT]
         assert spec.name == "labelme_text"
         assert spec.coordinate_order == "xyxy"
-        assert spec.coordinate_scale == "normalized"
+        assert spec.coordinate_scale == "norm_1"
         assert spec.response_structure == "free_text"
         assert spec.confidence_included is False
 
@@ -78,7 +78,7 @@ class TestDetectionFormatSpec:
         spec = FORMAT_SPECS[OutputFormat.BOX_2D_JSON]
         assert spec.name == "box_2d_json"
         assert spec.coordinate_order == "xyxy"
-        assert spec.coordinate_scale == "normalized"
+        assert spec.coordinate_scale == "norm_1"
         assert spec.response_structure == "json_array"
         assert spec.confidence_included is True
 

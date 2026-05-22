@@ -70,6 +70,7 @@ def prescan_label_statistics(source_dir: Path, max_workers: int = 4) -> Dict[str
 
 
 def verify_unsloth_format(jsonl_path: str | Path, num_samples: int = 3) -> tuple[bool, Dict[str, Any] | str]:
+    """验证JSONL文件格式完整性，支持 OpenAI messages 和 ShareGPT 两种格式。"""
     path = Path(jsonl_path)
     if not path.exists():
         return False, "文件不存在"
@@ -84,17 +85,54 @@ def verify_unsloth_format(jsonl_path: str | Path, num_samples: int = 3) -> tuple
             total += 1
             try:
                 record = json_loads(line)
-                messages = record.get("messages", [])
-                if "messages" not in record:
-                    errors.append(f"样本{index + 1}: 缺少messages字段")
+
+                # Detect schema type
+                if "conversations" in record:
+                    # ShareGPT format
+                    conversations = record.get("conversations", [])
+                    if not conversations:
+                        errors.append(f"样本{index + 1}: conversations为空")
+                        continue
+                    if conversations[0].get("from") != "human":
+                        errors.append(f"样本{index + 1}: conversations第一条应来自human")
+                        continue
+                    if len(conversations) == 2 and conversations[1].get("from") != "gpt":
+                        errors.append(f"样本{index + 1}: conversations第二条应来自gpt")
+                        continue
+                    if "id" not in record:
+                        errors.append(f"样本{index + 1}: 缺少id字段")
+                        continue
+                    if "image" not in record:
+                        errors.append(f"样本{index + 1}: 缺少image字段")
+                        continue
+                    valid += 1
+
+                elif "messages" in record:
+                    # OpenAI messages format
+                    messages = record.get("messages", [])
+                    if "messages" not in record:
+                        errors.append(f"样本{index + 1}: 缺少messages字段")
+                        continue
+                    if "images" not in record:
+                        errors.append(f"样本{index + 1}: 缺少images字段")
+                        continue
+                    if not messages:
+                        errors.append(f"样本{index + 1}: messages为空")
+                        continue
+                    # Check user message exists
+                    if messages[0].get("role") != "user":
+                        errors.append(f"样本{index + 1}: messages第一条应为user")
+                        continue
+                    # Assistant message optional for test-only records
+                    if len(messages) > 1 and messages[1].get("role") != "assistant":
+                        errors.append(f"样本{index + 1}: messages第二条应为assistant")
+                        continue
+                    valid += 1
+
+                else:
+                    errors.append(f"样本{index + 1}: 未知格式(缺少messages或conversations)")
                     continue
-                if "images" not in record:
-                    errors.append(f"样本{index + 1}: 缺少images字段")
-                    continue
-                if len(messages) != 2 or messages[0].get("role") != "user" or messages[1].get("role") != "assistant":
-                    errors.append(f"样本{index + 1}: messages格式不符合要求")
-                    continue
-                valid += 1
+
             except ValueError as exc:
                 errors.append(f"样本{index + 1}: JSON解析错误 - {exc}")
 
@@ -107,4 +145,3 @@ def verify_unsloth_format(jsonl_path: str | Path, num_samples: int = 3) -> tuple
     if errors:
         result["错误详情"] = "; ".join(errors[:3])
     return passed, result
-

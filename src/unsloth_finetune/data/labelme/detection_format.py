@@ -7,6 +7,9 @@ bounding box output capability.
 Two format modes:
 - LABELME_TEXT: legacy Chinese free-text with [x_min, y_min, x_max, y_max]
 - BOX_2D_JSON: JSON array with box_2d keys, normalized [x_min, y_min, x_max, y_max]
+
+Also provides a prompt template registry for generating detection prompts
+in multiple languages and styles.
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ import json
 import re
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
@@ -24,12 +28,60 @@ class OutputFormat(str, Enum):
     BOX_2D_JSON = "box_2d_json"
 
 
+class CoordNorm(str, Enum):
+    """Coordinate normalization modes."""
+    RAW = "raw"
+    NORM_1 = "norm_1"
+    NORM_100 = "norm_100"
+    NORM_1000 = "norm_1000"
+
+
+class CoordFormat(str, Enum):
+    """Coordinate output format modes."""
+    XYXY = "xyxy"
+    XYWH = "xywh"
+    CXCYWH = "cxcywh"
+
+
+class GenStrategy(str, Enum):
+    """Data generation strategy."""
+    ALL_IN_ONE = "all_in_one"
+    PER_CLASS = "per_class"
+    BOTH = "both"
+
+
+class SplitMethod(str, Enum):
+    """Dataset split method."""
+    RANDOM = "random"
+    SEQUENTIAL = "sequential"
+    STRATIFIED = "stratified"
+
+
+class OutputSchema(str, Enum):
+    """Output record schema."""
+    OPENAI_MESSAGES = "openai_messages"
+    SHAREGPT = "sharegpt"
+
+
+class PromptLang(str, Enum):
+    """Prompt language."""
+    EN = "en"
+    ZH = "zh"
+
+
+class PromptStyle(str, Enum):
+    """Prompt style."""
+    SIMPLE = "simple"
+    DESCRIPTIVE = "descriptive"
+    COT = "cot"
+
+
 @dataclass
 class DetectionFormatSpec:
     """Specification for a detection format."""
     name: str
     coordinate_order: str        # "xyxy" or "yxxy"
-    coordinate_scale: str        # "normalized" or "1000x1000"
+    coordinate_scale: str        # "raw", "norm_1", "norm_100", "norm_1000"
     response_structure: str      # "json_array" or "free_text"
     confidence_included: bool
 
@@ -38,14 +90,14 @@ FORMAT_SPECS: Dict[OutputFormat, DetectionFormatSpec] = {
     OutputFormat.LABELME_TEXT: DetectionFormatSpec(
         name="labelme_text",
         coordinate_order="xyxy",
-        coordinate_scale="normalized",
+        coordinate_scale="norm_1",
         response_structure="free_text",
         confidence_included=False,
     ),
     OutputFormat.BOX_2D_JSON: DetectionFormatSpec(
         name="box_2d_json",
         coordinate_order="xyxy",
-        coordinate_scale="normalized",
+        coordinate_scale="norm_1",
         response_structure="json_array",
         confidence_included=True,
     ),
@@ -54,11 +106,272 @@ FORMAT_SPECS: Dict[OutputFormat, DetectionFormatSpec] = {
 DetectionPromptBuilder = Callable[[str], str]
 
 
-def build_box_2d_json_response(bboxes: List[Dict[str, float]]) -> str:
+# ---------------------------------------------------------------------------
+# Prompt Template Registry
+# ---------------------------------------------------------------------------
+
+# Built-in prompt templates keyed by (lang, style, strategy)
+# {class_list} placeholder is rendered as "[cat, dog]" for all_in_one or "[cat]" for per_class
+_BUILTIN_PROMPT_TEMPLATES: Dict[Tuple[str, str, str], str] = {
+    # English - all_in_one
+    ("en", "simple", "all_in_one"): "Detect all [{class_list}].",
+    ("en", "descriptive", "all_in_one"): "Please detect all [{class_list}] in the image and return their categories and bounding boxes.",
+    ("en", "cot", "all_in_one"): "Please think step by step, then detect all [{class_list}] in the image and return their bounding boxes.",
+    # English - per_class
+    ("en", "simple", "per_class"): "Detect all [{class_list}].",
+    ("en", "descriptive", "per_class"): "Please detect all [{class_list}] in the image and return their bounding boxes.",
+    ("en", "cot", "per_class"): "Please think step by step, then detect all [{class_list}] in the image and return their bounding boxes.",
+    # Chinese - all_in_one
+    ("zh", "simple", "all_in_one"): "检测图片中所有[{class_list}]。",
+    ("zh", "descriptive", "all_in_one"): "请检测图片中所有的[{class_list}], 并返回它们的边界框坐标。",
+    ("zh", "cot", "all_in_one"): "请逐步思考, 然后检测图片中所有的[{class_list}], 并返回它们的边界框坐标。",
+    # Chinese - per_class
+    ("zh", "simple", "per_class"): "检测图片中所有的[{class_list}]。",
+    ("zh", "descriptive", "per_class"): "请检测图片中所有的[{class_list}], 并返回其边界框坐标。",
+    ("zh", "cot", "per_class"): "请逐步思考, 然后检测图片中所有的[{class_list}], 并返回其边界框坐标。",
+}
+
+# Built-in response templates keyed by (lang, strategy)
+_BUILTIN_RESPONSE_TEMPLATES: Dict[Tuple[str, str], str] = {
+    # English - all_in_one
+    ("en", "all_in_one"): "I detected the following objects:\n{bbox_items}",
+    # English - per_class
+    ("en", "per_class"): "I found {count} [{class_list}]:\n{bbox_items}",
+    # Chinese - all_in_one
+    ("zh", "all_in_one"): "检测到以下目标:\n{bbox_items}",
+    # Chinese - per_class
+    ("zh", "per_class"): "发现{count}个[{class_list}]:\n{bbox_items}",
+}
+
+# Coordinate format description templates keyed by (lang, coord_format)
+_COORD_FORMAT_DESCRIPTIONS: Dict[Tuple[str, str], str] = {
+    ("en", "xyxy"): "[x_min, y_min, x_max, y_max]",
+    ("en", "xywh"): "[x, y, width, height]",
+    ("en", "cxcywh"): "[center_x, center_y, width, height]",
+    ("zh", "xyxy"): "[x_min, y_min, x_max, y_max]",
+    ("zh", "xywh"): "[x, y, 宽, 高]",
+    ("zh", "cxcywh"): "[中心x, 中心y, 宽, 高]",
+}
+
+
+def load_prompt_template_yaml(path: str) -> Dict[Tuple[str, str, str], str]:
+    """Load custom prompt templates from a YAML file.
+
+    YAML format:
+        all_in_one_en: "Please detect all [{class_list}] ..."
+        per_class_en: "Detect all [{class_list}] ..."
+        all_in_one_zh: "请检测图片中所有[{class_list}] ..."
+        per_class_zh: "请检测图片中所有的 [{class_list}] ..."
+
+    Returns a dict keyed by (lang, style, custom) where style is "custom".
+    """
+    try:
+        import yaml
+    except ImportError:
+        raise ImportError("PyYAML is required for custom prompt template loading. Install with: pip install pyyaml")
+
+    yaml_path = Path(path)
+    if not yaml_path.exists():
+        raise FileNotFoundError(f"Prompt template file not found: {path}")
+
+    with open(yaml_path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+
+    templates: Dict[Tuple[str, str, str], str] = {}
+    for key, value in data.items():
+        if not isinstance(value, str):
+            continue
+        # Parse key like "all_in_one_en" or "per_class_zh"
+        parts = key.rsplit("_", 1)
+        if len(parts) != 2:
+            continue
+        strategy_part, lang_part = parts
+        if strategy_part == "all_in_one":
+            strategy = "all_in_one"
+        elif strategy_part == "per_class":
+            strategy = "per_class"
+        else:
+            continue
+        templates[(lang_part, "custom", strategy)] = value
+
+    return templates
+
+
+def build_detection_prompt(
+    lang: str,
+    prompt_style: str,
+    gen_strategy: str,
+    class_list: List[str],
+    custom_templates: Optional[Dict[Tuple[str, str, str], str]] = None,
+) -> str:
+    """Build a detection prompt string.
+
+    Args:
+        lang: "en" or "zh"
+        prompt_style: "simple", "descriptive", "cot", or "custom"
+        gen_strategy: "all_in_one" or "per_class"
+        class_list: list of class names
+        custom_templates: optional dict from load_prompt_template_yaml()
+    """
+    # Render class_list placeholder
+    if gen_strategy == "all_in_one":
+        class_str = ", ".join(class_list)
+    else:
+        class_str = class_list[0] if len(class_list) == 1 else ", ".join(class_list)
+
+    # Check custom templates first
+    if prompt_style == "custom" and custom_templates:
+        key = (lang, "custom", gen_strategy)
+        if key in custom_templates:
+            return custom_templates[key].replace("{class_list}", class_str)
+
+    # Fall back to built-in templates
+    key = (lang, prompt_style, gen_strategy)
+    if key in _BUILTIN_PROMPT_TEMPLATES:
+        return _BUILTIN_PROMPT_TEMPLATES[key].replace("{class_list}", class_str)
+
+    # Ultimate fallback
+    return f"Please detect all [{class_str}] in the image and return their bounding boxes."
+
+
+def build_detection_response(
+    lang: str,
+    gen_strategy: str,
+    bboxes: List[Dict[str, Any]],
+    coord_format: str = "xyxy",
+    coord_norm: str = "norm_1",
+    target_category: Optional[str] = None,
+    output_format: str = "box_2d_json",
+) -> str:
+    """Build a detection response string.
+
+    Args:
+        lang: "en" or "zh"
+        gen_strategy: "all_in_one" or "per_class"
+        bboxes: list of bbox dicts with keys: x_min, y_min, x_max, y_max, label
+        coord_format: "xyxy", "xywh", "cxcywh"
+        coord_norm: "raw", "norm_1", "norm_100", "norm_1000"
+        target_category: for per_class mode, the category being described
+        output_format: "labelme_text" or "box_2d_json"
+    """
+    if output_format == "box_2d_json":
+        return _build_box_2d_json_response(bboxes, coord_norm, coord_format)
+
+    # labelme_text free-text format
+    coord_strs = []
+    for bbox in bboxes:
+        coords = _transform_and_format_coords(bbox, coord_norm, coord_format)
+        label = bbox["label"]
+        if gen_strategy == "per_class":
+            coord_strs.append(f"- {coords}")
+        else:
+            coord_strs.append(f"- {label}: {coords}")
+
+    bbox_items = "\n".join(coord_strs)
+
+    if gen_strategy == "per_class":
+        class_list = [target_category] if target_category else []
+        count = len(bboxes)
+        key = (lang, "per_class")
+    else:
+        class_list = list(set(b["label"] for b in bboxes))
+        count = len(bboxes)
+        key = (lang, "all_in_one")
+
+    template = _BUILTIN_RESPONSE_TEMPLATES.get(key, "Detected objects:\n{bbox_items}")
+
+    class_str = ", ".join(class_list)
+    return template.replace("{bbox_items}", bbox_items).replace("{count}", str(count)).replace("{class_list}", class_str)
+
+
+def _transform_and_format_coords(
+    bbox: Dict[str, Any],
+    coord_norm: str,
+    coord_format: str,
+) -> str:
+    """Transform coordinates to target format and norm, then format as string."""
+    x_min, y_min, x_max, y_max = bbox["x_min"], bbox["y_min"], bbox["x_max"], bbox["y_max"]
+
+    # Transform to target format
+    if coord_format == "xyxy":
+        coords = [x_min, y_min, x_max, y_max]
+    elif coord_format == "xywh":
+        coords = [x_min, y_min, x_max - x_min, y_max - y_min]
+    elif coord_format == "cxcywh":
+        cx = (x_min + x_max) / 2
+        cy = (y_min + y_max) / 2
+        coords = [cx, cy, x_max - x_min, y_max - y_min]
+    else:
+        coords = [x_min, y_min, x_max, y_max]
+
+    # Format based on norm
+    if coord_norm == "raw":
+        return "[" + ", ".join(str(int(round(c))) for c in coords) + "]"
+    elif coord_norm == "norm_1":
+        return "[" + ", ".join(f"{c:.4f}" for c in coords) + "]"
+    elif coord_norm == "norm_100":
+        return "[" + ", ".join(str(int(round(c * 100))) for c in coords) + "]"
+    elif coord_norm == "norm_1000":
+        return "[" + ", ".join(str(int(round(c * 1000))) for c in coords) + "]"
+    else:
+        return "[" + ", ".join(f"{c:.4f}" for c in coords) + "]"
+
+
+def _build_box_2d_json_response(
+    bboxes: List[Dict[str, Any]],
+    coord_norm: str = "norm_1",
+    coord_format: str = "xyxy",
+) -> str:
     """Build a box_2d_json format response string from bbox list.
 
     Each bbox dict should have: x_min, y_min, x_max, y_max, label.
+    Coordinates are in normalized [0,1] range (coord_norm dependent).
+    """
+    detections = []
+    for bbox in bboxes:
+        x_min, y_min, x_max, y_max = bbox["x_min"], bbox["y_min"], bbox["x_max"], bbox["y_max"]
+
+        if coord_format == "xyxy":
+            raw_coords = [x_min, y_min, x_max, y_max]
+        elif coord_format == "xywh":
+            raw_coords = [x_min, y_min, x_max - x_min, y_max - y_min]
+        elif coord_format == "cxcywh":
+            raw_coords = [(x_min + x_max) / 2, (y_min + y_max) / 2, x_max - x_min, y_max - y_min]
+        else:
+            raw_coords = [x_min, y_min, x_max, y_max]
+
+        # Scale coordinates based on coord_norm
+        if coord_norm == "raw":
+            scaled_coords = [int(round(c)) for c in raw_coords]
+        elif coord_norm == "norm_1":
+            scaled_coords = [round(c, 4) for c in raw_coords]
+        elif coord_norm == "norm_100":
+            scaled_coords = [int(round(c * 100)) for c in raw_coords]
+        elif coord_norm == "norm_1000":
+            scaled_coords = [int(round(c * 1000)) for c in raw_coords]
+        else:
+            scaled_coords = [round(c, 4) for c in raw_coords]
+
+        detection = {
+            "box_2d": scaled_coords,
+            "label": bbox["label"],
+        }
+        # Include coordinate format info in first detection's metadata
+        if not detections:
+            detection["coord_format"] = coord_format
+            detection["coord_norm"] = coord_norm
+
+        detections.append(detection)
+
+    return json.dumps(detections, ensure_ascii=False)
+
+
+def build_box_2d_json_response(bboxes: List[Dict[str, float]]) -> str:
+    """Legacy function: Build a box_2d_json format response string.
+
+    Each bbox dict should have: x_min, y_min, x_max, y_max, label.
     Returns a JSON array string with box_2d keys and normalized coords.
+    Kept for backward compatibility with inference code.
     """
     detections = []
     for bbox in bboxes:
@@ -79,6 +392,7 @@ def build_cn_normalized_detection_prompt(query: str) -> str:
     """Build Chinese normalized xyxy detection prompt.
 
     Coordinates: [x_min, y_min, x_max, y_max] normalized 0-1.
+    Kept for backward compatibility with inference code.
     """
     return (
         f"请仔细分析这张图片，{query}。\n"
@@ -99,6 +413,7 @@ def build_en_normalized_detection_prompt(query: str) -> str:
     """Build English normalized xyxy detection prompt.
 
     Coordinates: [x_min, y_min, x_max, y_max] normalized 0-1.
+    Kept for backward compatibility with inference code.
     """
     return (
         f"Analyze this image carefully. {query}\n"

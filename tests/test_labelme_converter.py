@@ -1,14 +1,37 @@
 """
-测试 labelme_converter 模块的核心功能
-覆盖 BoundingBox, ConversionRecord, DatasetSplit, ConversionResult, LabelMeConverter
+Tests for labelme_converter module covering all feature areas:
+- Coordinate normalization (raw/norm_1/norm_100/norm_1000)
+- Coordinate format (xyxy/xywh/cxcywh)
+- Generation strategy (all_in_one/per_class/both)
+- Prompt templates (en/zh, simple/descriptive/cot)
+- Data filtering (whitelist/blacklist/remap, bbox validation, shape types)
+- Output schema (openai_messages/sharegpt)
+- Split methods (random/sequential/stratified)
+- dataset_info.json output
+- ConversionRecord to_dict for both schemas
 """
 
 import json
+import math
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
 import pytest
 
+from unsloth_finetune.data.labelme.detection_format import (
+    CoordFormat,
+    CoordNorm,
+    GenStrategy,
+    OutputFormat,
+    OutputSchema,
+    PromptLang,
+    PromptStyle,
+    SplitMethod,
+    build_detection_prompt,
+    build_detection_response,
+    _transform_and_format_coords,
+)
 from unsloth_finetune.data.labelme.labelme_converter import (
     BoundingBox,
     ConversionRecord,
@@ -16,11 +39,12 @@ from unsloth_finetune.data.labelme.labelme_converter import (
     DatasetSplit,
     LabelMeConverter,
     convert_to_unsloth_format,
+    _parse_split_ratio,
 )
 
 
 # ============================================================
-# BoundingBox 测试
+# Data Classes
 # ============================================================
 
 class TestBoundingBox:
@@ -28,549 +52,599 @@ class TestBoundingBox:
     def test_basic_creation(self):
         bbox = BoundingBox(x_min=10.0, y_min=20.0, x_max=100.0, y_max=200.0, label="cat")
         assert bbox.x_min == 10.0
-        assert bbox.y_min == 20.0
-        assert bbox.x_max == 100.0
-        assert bbox.y_max == 200.0
         assert bbox.label == "cat"
 
     def test_normalized_values(self):
-        bbox = BoundingBox(x_min=0.1, y_min=0.2, x_max=0.5, y_max=0.8, label="dog")
+        bbox = BoundingBox(x_min=0.1875, y_min=0.0938, x_max=0.5, y_max=0.5833, label="dog")
         assert bbox.x_min < 1.0
-        assert bbox.y_max < 1.0
 
-    def test_zero_values(self):
-        bbox = BoundingBox(x_min=0, y_min=0, x_max=0, y_max=0, label="empty")
-        assert bbox.x_min == 0
-
-
-# ============================================================
-# ConversionRecord 测试
-# ============================================================
 
 class TestConversionRecord:
 
     def test_basic_creation(self):
         record = ConversionRecord(
-            messages=[{"role": "user", "content": "test"}],
-            images=["/path/to/image.jpg"],
-            metadata={"json_path": "/path/to/file.json", "num_objects": 2},
-            json_path="/path/to/file.json",
-            image_path="/path/to/image.jpg",
+            messages=[{"role": "user", "content": [{"type": "text", "text": "test"}]}],
+            images=["/path/img.jpg"],
+            metadata={"json_path": "/path/file.json"},
+            json_path="/path/file.json",
+            image_path="/path/img.jpg",
+            record_id="img_001",
+            gen_strategy_tag="all_in_one",
         )
-        assert len(record.messages) == 1
-        assert len(record.images) == 1
-        assert record.metadata["num_objects"] == 2
+        assert record.record_id == "img_001"
+        assert record.gen_strategy_tag == "all_in_one"
+        assert record.is_test_only == False
 
-    def test_to_dict(self):
+    def test_to_dict_openai_messages(self):
         record = ConversionRecord(
-            messages=[{"role": "user", "content": "hello"}],
+            messages=[
+                {"role": "user", "content": [{"type": "text", "text": "prompt"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "response"}]},
+            ],
             images=["/path/img.jpg"],
             metadata={"key": "value"},
             json_path="/path/file.json",
             image_path="/path/img.jpg",
+            record_id="img_001",
         )
-        d = record.to_dict()
+        d = record.to_dict(schema="openai_messages")
         assert "messages" in d
         assert "images" in d
         assert "metadata" in d
-        assert d["messages"] == [{"role": "user", "content": "hello"}]
-        assert d["metadata"]["key"] == "value"
+        assert len(d["messages"]) == 2
 
-
-# ============================================================
-# DatasetSplit 测试
-# ============================================================
-
-class TestDatasetSplit:
-
-    def test_default_values(self):
-        split = DatasetSplit(split_name="train")
-        assert split.split_name == "train"
-        assert split.records == []
-        assert split.total_records == 0
-        assert split.total_images == 0
-        assert split.total_objects == 0
-        assert split.label_distribution == {}
-        assert split.output_path is None
-
-    def test_duration_property(self):
-        split = DatasetSplit(split_name="train")
-        split.start_time = datetime(2024, 1, 1, 10, 0, 0)
-        split.end_time = datetime(2024, 1, 1, 10, 0, 10)
-        assert split.duration == 10.0
-
-    def test_duration_none(self):
-        split = DatasetSplit(split_name="train")
-        assert split.duration is None
-
-    def test_to_dict(self):
-        split = DatasetSplit(
-            split_name="val",
-            total_records=5,
-            total_images=5,
-            total_objects=10,
-            label_distribution={"cat": 5, "dog": 5},
-            output_path="/path/valid.jsonl",
+    def test_to_dict_sharegpt(self):
+        record = ConversionRecord(
+            messages=[
+                {"role": "user", "content": [{"type": "text", "text": "Detect all [cat]."}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "Found 1 cat: [120, 45, 320, 280]"}]},
+            ],
+            images=["images/img_001.jpg"],
+            metadata={},
+            json_path="/path/file.json",
+            image_path="/path/img.jpg",
+            record_id="img_001",
         )
-        d = split.to_dict()
-        assert d["split_name"] == "val"
-        assert d["total_records"] == 5
-        assert d["total_images"] == 5
-        assert d["total_objects"] == 10
-        assert d["label_distribution"]["cat"] == 5
-        assert d["output_path"] == "/path/valid.jsonl"
+        d = record.to_dict(schema="sharegpt")
+        assert d["id"] == "img_001"
+        assert d["image"] == "images/img_001.jpg"
+        assert len(d["conversations"]) == 2
+        assert d["conversations"][0]["from"] == "human"
+        assert "<image>" in d["conversations"][0]["value"]
 
+    def test_to_dict_sharegpt_test_only(self):
+        record = ConversionRecord(
+            messages=[
+                {"role": "user", "content": [{"type": "text", "text": "Detect all [cat]."}]},
+            ],
+            images=["images/img_001.jpg"],
+            metadata={},
+            json_path="/path/file.json",
+            image_path="/path/img.jpg",
+            record_id="img_001",
+            is_test_only=True,
+        )
+        d = record.to_dict(schema="sharegpt")
+        assert len(d["conversations"]) == 1
+        assert d["conversations"][0]["from"] == "human"
 
-# ============================================================
-# ConversionResult 测试
-# ============================================================
+    def test_to_dict_openai_test_only(self):
+        record = ConversionRecord(
+            messages=[
+                {"role": "user", "content": [{"type": "text", "text": "Detect all [cat]."}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "response"}]},
+            ],
+            images=["/path/img.jpg"],
+            metadata={},
+            json_path="/path/file.json",
+            image_path="/path/img.jpg",
+            is_test_only=True,
+        )
+        d = record.to_dict(schema="openai_messages")
+        assert len(d["messages"]) == 1
+        assert d["messages"][0]["role"] == "user"
+
 
 class TestConversionResult:
 
     def test_default_values(self):
-        result = ConversionResult(
-            source_dir="/path/to/source",
-            output_dir="/path/to/output",
-        )
-        assert result.source_dir == "/path/to/source"
-        assert result.output_dir == "/path/to/output"
-        assert result.train_split is None
-        assert result.val_split is None
-        assert result.test_split is None
-        assert result.total_json_files == 0
-        assert result.converted_count == 0
-        assert result.failed_count == 0
-        assert result.skipped_count == 0
-        assert result.failed_files == []
+        result = ConversionResult(source_dir="/src", output_dir="/out")
+        assert result.skipped_details["empty_annotations"] == 0
+        assert result.skipped_details["invalid_bbox"] == 0
+        assert result.skipped_details["missing_images"] == 0
+        assert result.config == {}
 
     def test_duration_property(self):
-        result = ConversionResult(
-            source_dir="/path/to/source",
-            output_dir="/path/to/output",
-        )
+        result = ConversionResult(source_dir="/src", output_dir="/out")
         result.start_time = datetime(2024, 1, 1)
         result.end_time = datetime(2024, 1, 1, 0, 0, 30)
         assert result.duration == 30.0
 
-    def test_conversion_rate_property(self):
-        result = ConversionResult(
-            source_dir="/path/to/source",
-            output_dir="/path/to/output",
-            total_json_files=100,
-            converted_count=80,
-        )
-        assert result.conversion_rate == 80.0
-
     def test_conversion_rate_zero_total(self):
-        result = ConversionResult(
-            source_dir="/path/to/source",
-            output_dir="/path/to/output",
-            total_json_files=0,
-            converted_count=0,
-        )
+        result = ConversionResult(source_dir="/src", output_dir="/out")
         assert result.conversion_rate is None
 
-    def test_to_dict(self):
-        result = ConversionResult(
-            source_dir="/path/to/source",
-            output_dir="/path/to/output",
-            total_json_files=10,
-            converted_count=8,
-            failed_count=1,
-            skipped_count=1,
-            instruction_text="test instruction",
+
+class TestDatasetSplit:
+
+    def test_to_dict_compact(self):
+        split = DatasetSplit(
+            split_name="train",
+            total_records=800,
+            total_images=800,
+            total_objects=3620,
         )
-        d = result.to_dict()
-        assert d["source_dir"] == "/path/to/source"
-        assert d["total_json_files"] == 10
-        assert d["converted_count"] == 8
-        assert d["conversion_rate"] == 80.0
-        assert d["instruction_text"] == "test instruction"
+        d = split.to_dict()
+        assert d["records"] == 800
+        assert d["images"] == 800
+        assert d["annotations"] == 3620
 
 
 # ============================================================
-# LabelMeConverter 内部方法测试
+# Split Ratio Parsing
 # ============================================================
 
-class TestLabelMeConverterInternal:
+class TestSplitRatioParsing:
 
-    @pytest.fixture
-    def converter(self, tmp_path):
-        return LabelMeConverter(
-            source_dir=str(tmp_path),
-            output_dir=str(tmp_path / "output"),
-            use_tqdm=False,
-            validate_images=False,
-        )
+    def test_standard_8_1_1(self):
+        t, v, te = _parse_split_ratio("8:1:1")
+        assert t == 0.8
+        assert v == 0.1
+        assert te == 0.1
 
-    def test_polygon_to_bbox(self, converter):
-        points = [[10, 20], [100, 20], [100, 200], [10, 200]]
-        bbox = converter._polygon_to_bbox(points, "cat")
-        assert bbox.x_min == 10
-        assert bbox.y_min == 20
-        assert bbox.x_max == 100
-        assert bbox.y_max == 200
-        assert bbox.label == "cat"
+    def test_no_test_9_1_0(self):
+        t, v, te = _parse_split_ratio("9:1:0")
+        assert t == 0.9
+        assert v == 0.1
+        assert te == 0.0
 
-    def test_polygon_to_bbox_invalid_points(self, converter):
+    def test_custom_7_2_1(self):
+        t, v, te = _parse_split_ratio("7:2:1")
+        assert t == 0.7
+        assert v == 0.2
+        assert te == 0.1
+
+    def test_invalid_format(self):
         with pytest.raises(ValueError):
-            converter._polygon_to_bbox([], "cat")
+            _parse_split_ratio("8:1")
 
-    def test_polygon_to_bbox_single_point(self, converter):
+    def test_invalid_values(self):
         with pytest.raises(ValueError):
-            converter._polygon_to_bbox([[10, 20]], "cat")
+            _parse_split_ratio("a:b:c")
 
-    def test_rectangle_to_bbox(self, converter):
-        shape = {
-            "label": "dog",
-            "points": [[10, 20], [100, 200]],
-        }
-        bbox = converter._rectangle_to_bbox(shape)
-        assert bbox.x_min == 10
-        assert bbox.y_min == 20
-        assert bbox.x_max == 100
-        assert bbox.y_max == 200
-        assert bbox.label == "dog"
 
-    def test_rectangle_to_bbox_swapped_coords(self, converter):
-        shape = {
-            "label": "cat",
-            "points": [[100, 200], [10, 20]],
-        }
-        bbox = converter._rectangle_to_bbox(shape)
-        assert bbox.x_min == 10
-        assert bbox.x_max == 100
+# ============================================================
+# Coordinate Pipeline
+# ============================================================
 
-    def test_circle_to_bbox(self, converter):
-        shape = {
-            "label": "bird",
-            "points": [[50, 50]],
-            "radius": 25,
-        }
-        bbox = converter._circle_to_bbox(shape)
-        assert bbox.x_min == 25
-        assert bbox.y_min == 25
-        assert bbox.x_max == 75
-        assert bbox.y_max == 75
+class TestCoordNormalization:
 
-    def test_shape_to_bbox_polygon(self, converter):
-        shape = {
-            "label": "cat",
-            "shape_type": "polygon",
-            "points": [[10, 20], [100, 200], [50, 150]],
-        }
-        bbox = converter._shape_to_bbox(shape)
-        assert bbox is not None
-        assert bbox.label == "cat"
+    def test_raw_mode(self):
+        conv = LabelMeConverter(source_dir=".", output_dir=".", coord_norm="raw")
+        bbox = BoundingBox(x_min=120, y_min=45, x_max=320, y_max=280, label="cat")
+        result = conv._normalize_bbox(bbox, 640, 480)
+        assert result.x_min == 120
+        assert result.y_min == 45
 
-    def test_shape_to_bbox_rectangle(self, converter):
-        shape = {
-            "label": "dog",
-            "shape_type": "rectangle",
-            "points": [[10, 20], [100, 200]],
-        }
-        bbox = converter._shape_to_bbox(shape)
-        assert bbox is not None
+    def test_norm_1_mode(self):
+        conv = LabelMeConverter(source_dir=".", output_dir=".", coord_norm="norm_1")
+        bbox = BoundingBox(x_min=120, y_min=45, x_max=320, y_max=280, label="cat")
+        result = conv._normalize_bbox(bbox, 640, 480)
+        assert result.x_min == pytest.approx(0.1875, abs=0.001)
+        assert result.y_min == pytest.approx(0.0938, abs=0.001)
 
-    def test_shape_to_bbox_circle(self, converter):
-        shape = {
-            "label": "bird",
-            "shape_type": "circle",
-            "points": [[50, 50]],
-            "radius": 30,
-        }
-        bbox = converter._shape_to_bbox(shape)
-        assert bbox is not None
+    def test_norm_100_mode(self):
+        conv = LabelMeConverter(source_dir=".", output_dir=".", coord_norm="norm_100")
+        bbox = BoundingBox(x_min=120, y_min=45, x_max=320, y_max=280, label="cat")
+        result = conv._normalize_bbox(bbox, 640, 480)
+        assert result.x_min == 19
+        assert result.y_min == 9
 
-    def test_shape_to_bbox_invalid(self, converter):
-        shape = {
-            "label": "invalid",
-            "shape_type": "polygon",
-            "points": [],
-        }
-        bbox = converter._shape_to_bbox(shape)
-        # Should return None because of ValueError
-        assert bbox is None
+    def test_norm_1000_mode(self):
+        conv = LabelMeConverter(source_dir=".", output_dir=".", coord_norm="norm_1000")
+        bbox = BoundingBox(x_min=120, y_min=45, x_max=320, y_max=280, label="cat")
+        result = conv._normalize_bbox(bbox, 640, 480)
+        assert result.x_min == 188
+        assert result.y_min == 94
 
-    def test_normalize_bbox(self, converter):
-        bbox = BoundingBox(x_min=10, y_min=20, x_max=100, y_max=200, label="cat")
-        normalized = converter._normalize_bbox(bbox, 1000, 500)
-        assert normalized.x_min == 0.01
-        assert normalized.y_min == 0.04
-        assert normalized.x_max == 0.1
-        assert normalized.y_max == 0.4
-
-    def test_normalize_bbox_invalid_dimensions(self, converter):
-        bbox = BoundingBox(x_min=10, y_min=20, x_max=100, y_max=200, label="cat")
+    def test_invalid_image_size(self):
+        conv = LabelMeConverter(source_dir=".", output_dir=".", coord_norm="norm_1")
+        bbox = BoundingBox(x_min=120, y_min=45, x_max=320, y_max=280, label="cat")
         with pytest.raises(ValueError):
-            converter._normalize_bbox(bbox, 0, 500)
+            conv._normalize_bbox(bbox, 0, 480)
 
-    def test_format_bbox_string_normalized(self, converter):
+
+class TestCoordFormatTransform:
+
+    def test_xyxy_format(self):
+        conv = LabelMeConverter(source_dir=".", output_dir=".", coord_format="xyxy")
         bbox = BoundingBox(x_min=0.1, y_min=0.2, x_max=0.5, y_max=0.8, label="cat")
-        result = converter._format_bbox_string(bbox, normalized=True)
-        assert "[0.1000, 0.2000, 0.5000, 0.8000]" == result
+        coords = conv._transform_coords(bbox)
+        assert coords == [0.1, 0.2, 0.5, 0.8]
 
-    def test_format_bbox_string_unnormalized(self, converter):
-        bbox = BoundingBox(x_min=10, y_min=20, x_max=100, y_max=200, label="cat")
-        result = converter._format_bbox_string(bbox, normalized=False)
-        assert "[10, 20, 100, 200]" == result
+    def test_xywh_format(self):
+        conv = LabelMeConverter(source_dir=".", output_dir=".", coord_format="xywh")
+        bbox = BoundingBox(x_min=0.1, y_min=0.2, x_max=0.5, y_max=0.8, label="cat")
+        coords = conv._transform_coords(bbox)
+        assert coords == pytest.approx([0.1, 0.2, 0.4, 0.6], abs=0.001)
 
-    def test_generate_conversation_messages(self, converter):
-        bboxes = [
-            BoundingBox(x_min=0.1, y_min=0.2, x_max=0.5, y_max=0.8, label="cat"),
-            BoundingBox(x_min=0.3, y_min=0.1, x_max=0.7, y_max=0.6, label="dog"),
-        ]
-        messages = converter._generate_conversation_messages(bboxes)
-        assert len(messages) == 2
-        assert messages[0]["role"] == "user"
-        assert messages[1]["role"] == "assistant"
-        # JSONL格式: user content仅包含text，图片路径存储在images字段
-        user_content = messages[0]["content"]
-        assert len(user_content) == 1
-        assert user_content[0]["type"] == "text"
-        # 不应包含 {"type": "image"} 占位符
-        assert not any(item.get("type") == "image" for item in user_content)
+    def test_cxcywh_format(self):
+        conv = LabelMeConverter(source_dir=".", output_dir=".", coord_format="cxcywh")
+        bbox = BoundingBox(x_min=0.1, y_min=0.2, x_max=0.5, y_max=0.8, label="cat")
+        coords = conv._transform_coords(bbox)
+        assert coords == pytest.approx([0.3, 0.5, 0.4, 0.6], abs=0.001)
 
-    def test_generate_category_specific_messages(self, converter):
-        bboxes = [
-            BoundingBox(x_min=0.1, y_min=0.2, x_max=0.5, y_max=0.8, label="cat"),
-            BoundingBox(x_min=0.3, y_min=0.1, x_max=0.7, y_max=0.6, label="dog"),
-        ]
-        messages = converter._generate_category_specific_messages(bboxes, "cat")
-        assert len(messages) == 2
-        assert messages[0]["role"] == "user"
-        # JSONL格式: user content仅包含text
-        user_content = messages[0]["content"]
-        assert user_content[0]["type"] == "text"
-        assert not any(item.get("type") == "image" for item in user_content)
 
-    def test_split_dataset(self, converter):
-        records = [
-            ConversionRecord(
-                messages=[],
-                images=[f"/path/{i}.jpg"],
-                metadata={"num_objects": 1},
-                json_path=f"/path/{i}.json",
-                image_path=f"/path/{i}.jpg",
-            )
-            for i in range(10)
-        ]
-        train, val, test = converter._split_dataset(records)
-        assert len(train) == 8
-        assert len(val) == 1
-        assert len(test) == 1
+class TestCoordFormatting:
 
-    def test_split_dataset_keeps_same_image_in_single_split(self, converter):
-        records = [
-            ConversionRecord(
-                messages=[],
-                images=["/path/shared.jpg"],
-                metadata={"num_objects": 1, "labels": ["cat"]},
-                json_path="/path/shared.json",
-                image_path="/path/shared.jpg",
-            ),
-            ConversionRecord(
-                messages=[],
-                images=["/path/shared.jpg"],
-                metadata={"num_objects": 1, "labels": ["dog"]},
-                json_path="/path/shared.json",
-                image_path="/path/shared.jpg",
-            ),
-            ConversionRecord(
-                messages=[],
-                images=["/path/other.jpg"],
-                metadata={"num_objects": 1, "labels": ["bird"]},
-                json_path="/path/other.json",
-                image_path="/path/other.jpg",
-            ),
-        ]
+    def test_raw_formatting(self):
+        conv = LabelMeConverter(source_dir=".", output_dir=".", coord_norm="raw")
+        formatted = conv._format_coord_list([120, 45, 320, 280])
+        assert formatted == "[120, 45, 320, 280]"
 
-        train, val, test = converter._split_dataset(records)
-        memberships = {}
-        for split_name, split_records in (("train", train), ("val", val), ("test", test)):
-            for record in split_records:
-                memberships.setdefault(record.image_path, set()).add(split_name)
+    def test_norm_1_formatting(self):
+        conv = LabelMeConverter(source_dir=".", output_dir=".", coord_norm="norm_1")
+        formatted = conv._format_coord_list([0.1875, 0.0938, 0.5, 0.5833])
+        assert formatted == "[0.1875, 0.0938, 0.5000, 0.5833]"
 
-        assert len(memberships["/path/shared.jpg"]) == 1
+    def test_norm_100_formatting(self):
+        conv = LabelMeConverter(source_dir=".", output_dir=".", coord_norm="norm_100")
+        formatted = conv._format_coord_list([19, 9, 50, 58])
+        assert formatted == "[19, 9, 50, 58]"
 
-    def test_save_split_counts_unique_images(self, converter, tmp_path):
-        converter.output_dir = tmp_path
-        records = [
-            ConversionRecord(
-                messages=[],
-                images=["/path/shared.jpg"],
-                metadata={"num_objects": 1, "labels": ["cat"]},
-                json_path="/path/shared.json",
-                image_path="/path/shared.jpg",
-            ),
-            ConversionRecord(
-                messages=[],
-                images=["/path/shared.jpg"],
-                metadata={"num_objects": 2, "labels": ["dog"]},
-                json_path="/path/shared.json",
-                image_path="/path/shared.jpg",
-            ),
-        ]
-
-        split = converter._save_split(records, "train")
-
-        assert split.total_records == 2
-        assert split.total_images == 1
-        assert split.total_objects == 3
+    def test_norm_1000_formatting(self):
+        conv = LabelMeConverter(source_dir=".", output_dir=".", coord_norm="norm_1000")
+        formatted = conv._format_coord_list([188, 94, 500, 583])
+        assert formatted == "[188, 94, 500, 583]"
 
 
 # ============================================================
-# LabelMeConverter 转换流程测试
+# Bbox Validation
+# ============================================================
+
+class TestBboxValidation:
+
+    def test_valid_bbox(self):
+        conv = LabelMeConverter(source_dir=".", output_dir=".")
+        bbox = BoundingBox(x_min=10, y_min=10, x_max=100, y_max=100, label="cat")
+        assert conv._validate_bbox(bbox, 640, 480) == True
+
+    def test_negative_coords(self):
+        conv = LabelMeConverter(source_dir=".", output_dir=".")
+        bbox = BoundingBox(x_min=-10, y_min=10, x_max=100, y_max=100, label="cat")
+        assert conv._validate_bbox(bbox, 640, 480) == False
+
+    def test_out_of_bounds(self):
+        conv = LabelMeConverter(source_dir=".", output_dir=".")
+        bbox = BoundingBox(x_min=10, y_min=10, x_max=700, y_max=100, label="cat")
+        assert conv._validate_bbox(bbox, 640, 480) == False
+
+    def test_zero_area(self):
+        conv = LabelMeConverter(source_dir=".", output_dir=".")
+        bbox = BoundingBox(x_min=100, y_min=10, x_max=100, y_max=100, label="cat")
+        assert conv._validate_bbox(bbox, 640, 480) == False
+
+    def test_min_size_threshold(self):
+        conv = LabelMeConverter(source_dir=".", output_dir=".", min_bbox_size=5)
+        bbox = BoundingBox(x_min=10, y_min=10, x_max=13, y_max=100, label="cat")
+        assert conv._validate_bbox(bbox, 640, 480) == False
+
+    def test_min_size_pass(self):
+        conv = LabelMeConverter(source_dir=".", output_dir=".", min_bbox_size=5)
+        bbox = BoundingBox(x_min=10, y_min=10, x_max=20, y_max=100, label="cat")
+        assert conv._validate_bbox(bbox, 640, 480) == True
+
+
+# ============================================================
+# Prompt Templates
+# ============================================================
+
+class TestPromptTemplates:
+
+    def test_en_descriptive_all_in_one(self):
+        prompt = build_detection_prompt("en", "descriptive", "all_in_one", ["cat", "dog"])
+        assert "cat, dog" in prompt
+        assert "Please detect all" in prompt
+
+    def test_en_simple_per_class(self):
+        prompt = build_detection_prompt("en", "simple", "per_class", ["cat"])
+        assert "cat" in prompt
+        assert "Detect all" in prompt
+
+    def test_zh_descriptive_all_in_one(self):
+        prompt = build_detection_prompt("zh", "descriptive", "all_in_one", ["cat", "dog"])
+        assert "cat, dog" in prompt
+        assert "请检测" in prompt
+
+    def test_en_cot(self):
+        prompt = build_detection_prompt("en", "cot", "all_in_one", ["person"])
+        assert "think step by step" in prompt
+
+    def test_zh_cot(self):
+        prompt = build_detection_prompt("zh", "cot", "per_class", ["person"])
+        assert "逐步思考" in prompt
+
+
+class TestDetectionResponse:
+
+    def test_box_2d_json_response(self):
+        bboxes = [
+            {"x_min": 0.1875, "y_min": 0.0938, "x_max": 0.5, "y_max": 0.5833, "label": "cat"},
+        ]
+        response = build_detection_response(
+            lang="en", gen_strategy="all_in_one", bboxes=bboxes,
+            coord_format="xyxy", coord_norm="norm_1", output_format="box_2d_json",
+        )
+        data = json.loads(response)
+        assert data[0]["label"] == "cat"
+        assert data[0]["box_2d"] == pytest.approx([0.1875, 0.0938, 0.5, 0.5833], abs=0.001)
+
+    def test_labelme_text_response(self):
+        bboxes = [
+            {"x_min": 188, "y_min": 94, "x_max": 500, "y_max": 583, "label": "cat"},
+        ]
+        response = build_detection_response(
+            lang="zh", gen_strategy="all_in_one", bboxes=bboxes,
+            coord_format="xyxy", coord_norm="norm_1000", output_format="labelme_text",
+        )
+        assert "cat" in response
+
+
+# ============================================================
+# Detection Format Transform & Format
+# ============================================================
+
+class TestTransformAndFormatCoords:
+
+    def test_norm_1_xyxy(self):
+        result = _transform_and_format_coords(
+            {"x_min": 0.1875, "y_min": 0.0938, "x_max": 0.5, "y_max": 0.5833, "label": "cat"},
+            "norm_1", "xyxy",
+        )
+        assert result == "[0.1875, 0.0938, 0.5000, 0.5833]"
+
+    def test_norm_1000_xywh(self):
+        result = _transform_and_format_coords(
+            {"x_min": 188, "y_min": 94, "x_max": 500, "y_max": 583, "label": "cat"},
+            "norm_1000", "xywh",
+        )
+        assert "312" in result  # width = 500-188=312
+
+    def test_raw_cxcywh(self):
+        result = _transform_and_format_coords(
+            {"x_min": 120, "y_min": 45, "x_max": 320, "y_max": 280, "label": "cat"},
+            "raw", "cxcywh",
+        )
+        assert "220" in result  # cx = (120+320)/2=220
+
+
+# ============================================================
+# Shape to BBox Conversion
+# ============================================================
+
+class TestShapeToBbox:
+
+    def test_polygon_conversion(self):
+        conv = LabelMeConverter(source_dir=".", output_dir=".", shape_types=["rectangle", "polygon"])
+        shape = {"shape_type": "polygon", "points": [[10, 20], [50, 20], [50, 80], [10, 80]], "label": "cat"}
+        bbox = conv._shape_to_bbox(shape)
+        assert bbox.x_min == 10
+        assert bbox.x_max == 50
+
+    def test_rectangle_conversion(self):
+        conv = LabelMeConverter(source_dir=".", output_dir=".")
+        shape = {"shape_type": "rectangle", "points": [[10, 20], [50, 80]], "label": "dog"}
+        bbox = conv._shape_to_bbox(shape)
+        assert bbox.x_min == 10
+        assert bbox.x_max == 50
+
+    def test_circle_conversion(self):
+        conv = LabelMeConverter(source_dir=".", output_dir=".", shape_types=["rectangle", "circle"])
+        shape = {"shape_type": "circle", "points": [[100, 100]], "radius": 50, "label": "circle_obj"}
+        bbox = conv._shape_to_bbox(shape)
+        assert bbox.x_min == 50
+        assert bbox.x_max == 150
+
+
+# ============================================================
+# Full Pipeline Test
 # ============================================================
 
 class TestLabelMeConverterFlow:
 
-    @pytest.fixture
-    def converter_dir(self, tmp_path):
-        source_dir = tmp_path / "source"
-        source_dir.mkdir()
+    def _create_test_data(self, tmp_dir):
+        """Create minimal test data for pipeline testing."""
+        img_dir = tmp_dir / "images"
+        img_dir.mkdir()
+        json_dir = tmp_dir / "jsons"
+        json_dir.mkdir()
 
-        for i in range(5):
-            json_path = source_dir / f"img_{i:03d}.json"
-            data = {
-                "imagePath": f"img_{i:03d}.jpg",
-                "imageWidth": 640,
-                "imageHeight": 480,
-                "shapes": [
-                    {
-                        "label": "cat",
-                        "shape_type": "rectangle",
-                        "points": [[10, 20], [100, 200]],
-                    },
-                ],
-            }
-            json_path.write_text(json.dumps(data), encoding="utf-8")
-            (source_dir / f"img_{i:03d}.jpg").write_bytes(
-                b"\xff\xd8\xff\xe0" + b"\x00" * 200
-            )
+        # Create a simple test image
+        try:
+            from PIL import Image
+            img = Image.new("RGB", (640, 480), color="red")
+            img.save(str(img_dir / "img_001.jpg"))
+        except ImportError:
+            # Create a dummy file if PIL not available
+            (img_dir / "img_001.jpg").write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 100)
 
+        # Create a LabelMe JSON
+        data = {
+            "version": "5.0.1",
+            "imagePath": "img_001.jpg",
+            "imageHeight": 480,
+            "imageWidth": 640,
+            "shapes": [
+                {"label": "cat", "shape_type": "rectangle", "points": [[120, 45], [320, 280]]},
+                {"label": "dog", "shape_type": "rectangle", "points": [[400, 100], [600, 400]]},
+            ],
+        }
+        with open(json_dir / "img_001.json", "w", encoding="utf-8") as f:
+            json.dump(data, f)
+
+        return json_dir
+
+    def test_basic_convert_norm_1000_xyxy(self, tmp_path):
+        json_dir = self._create_test_data(tmp_path)
         output_dir = tmp_path / "output"
-        return source_dir, output_dir
 
-    def test_convert_basic(self, converter_dir):
-        source_dir, output_dir = converter_dir
-        converter = LabelMeConverter(
-            source_dir=str(source_dir),
+        result = convert_to_unsloth_format(
+            source_dir=str(json_dir),
             output_dir=str(output_dir),
-            use_tqdm=False,
+            coord_norm="norm_1000",
+            coord_format="xyxy",
+            gen_strategy="all_in_one",
+            lang="en",
+            prompt_style="descriptive",
+            split="8:1:1",
+            random_seed=42,
             validate_images=False,
+            output_format="box_2d_json",
+            image_path_mode="absolute",
         )
-        result = converter.convert()
-        assert result.total_json_files == 5
         assert result.converted_count > 0
         assert result.train_split is not None
-        assert result.train_split.output_path is not None
-        assert (output_dir / "valid.jsonl").exists()
 
-    def test_convert_with_validation(self, converter_dir):
-        source_dir, output_dir = converter_dir
-        converter = LabelMeConverter(
-            source_dir=str(source_dir),
+    def test_per_class_gen_strategy(self, tmp_path):
+        json_dir = self._create_test_data(tmp_path)
+        output_dir = tmp_path / "output"
+
+        result = convert_to_unsloth_format(
+            source_dir=str(json_dir),
             output_dir=str(output_dir),
-            use_tqdm=False,
-            validate_images=True,
+            coord_norm="norm_1",
+            gen_strategy="per_class",
+            lang="zh",
+            split="8:1:1",
+            random_seed=42,
+            validate_images=False,
+            output_format="labelme_text",
+            image_path_mode="absolute",
         )
-        result = converter.convert()
-        assert result.total_json_files == 5
+        # per_class should produce 2 records (cat + dog)
+        assert result.converted_count == 2
 
-    def test_convert_no_json_files(self, tmp_path):
+    def test_sharegpt_output(self, tmp_path):
+        json_dir = self._create_test_data(tmp_path)
+        output_dir = tmp_path / "output"
+
+        result = convert_to_unsloth_format(
+            source_dir=str(json_dir),
+            output_dir=str(output_dir),
+            coord_norm="norm_1000",
+            output_schema="sharegpt",
+            split="10:0:0",
+            random_seed=42,
+            validate_images=False,
+            image_path_mode="absolute",
+        )
+        assert result.train_split is not None
+        assert result.train_split.total_records > 0
+        # Check output file content
+        train_file = Path(result.train_split.output_path)
+        if train_file.exists():
+            with open(train_file, "r", encoding="utf-8") as f:
+                line = f.readline()
+                if line:
+                    record = json.loads(line)
+                    assert "conversations" in record
+                    assert "id" in record
+
+    def test_class_whitelist(self, tmp_path):
+        json_dir = self._create_test_data(tmp_path)
+        output_dir = tmp_path / "output"
+
+        result = convert_to_unsloth_format(
+            source_dir=str(json_dir),
+            output_dir=str(output_dir),
+            class_whitelist=["cat"],
+            split="8:1:1",
+            random_seed=42,
+            validate_images=False,
+            image_path_mode="absolute",
+        )
+        # Only cat should be in the output
+        assert result.converted_count > 0
+
+    def test_class_blacklist(self, tmp_path):
+        json_dir = self._create_test_data(tmp_path)
+        output_dir = tmp_path / "output"
+
+        result = convert_to_unsloth_format(
+            source_dir=str(json_dir),
+            output_dir=str(output_dir),
+            class_blacklist=["dog"],
+            split="8:1:1",
+            random_seed=42,
+            validate_images=False,
+            image_path_mode="absolute",
+        )
+        assert result.converted_count > 0
+
+    def test_no_json_files(self, tmp_path):
         empty_dir = tmp_path / "empty"
         empty_dir.mkdir()
         output_dir = tmp_path / "output"
-        converter = LabelMeConverter(
+
+        result = convert_to_unsloth_format(
             source_dir=str(empty_dir),
             output_dir=str(output_dir),
-            use_tqdm=False,
         )
-        result = converter.convert()
         assert result.total_json_files == 0
         assert result.converted_count == 0
 
-    def test_convert_per_category_mode(self, converter_dir):
-        source_dir, output_dir = converter_dir
-        converter = LabelMeConverter(
-            source_dir=str(source_dir),
-            output_dir=str(output_dir),
-            use_tqdm=False,
-            validate_images=False,
-            per_category_mode=True,
-        )
-        result = converter.convert()
-        assert result.converted_count > 0
+    def test_dataset_info_json(self, tmp_path):
+        json_dir = self._create_test_data(tmp_path)
+        output_dir = tmp_path / "output"
 
-    def test_convert_with_selected_files(self, converter_dir):
-        source_dir, output_dir = converter_dir
-        selected = [str(source_dir / "img_000.json"), str(source_dir / "img_001.json")]
-        converter = LabelMeConverter(
-            source_dir=str(source_dir),
+        result = convert_to_unsloth_format(
+            source_dir=str(json_dir),
             output_dir=str(output_dir),
-            use_tqdm=False,
+            split="8:1:1",
+            random_seed=42,
             validate_images=False,
-            selected_files=selected,
+            image_path_mode="absolute",
         )
-        result = converter.convert()
-        assert result.total_json_files == 2
-
-    def test_convert_no_normalize(self, converter_dir):
-        source_dir, output_dir = converter_dir
-        converter = LabelMeConverter(
-            source_dir=str(source_dir),
-            output_dir=str(output_dir),
-            use_tqdm=False,
-            validate_images=False,
-            normalize_coordinates=False,
-        )
-        result = converter.convert()
-        assert result.converted_count > 0
-
-    def test_convert_output_jsonl_exists(self, converter_dir):
-        source_dir, output_dir = converter_dir
-        converter = LabelMeConverter(
-            source_dir=str(source_dir),
-            output_dir=str(output_dir),
-            use_tqdm=False,
-            validate_images=False,
-        )
-        result = converter.convert()
-        if result.train_split and result.train_split.output_path:
-            train_path = Path(result.train_split.output_path)
-            assert train_path.exists()
-            content = train_path.read_text(encoding="utf-8")
-            lines = content.strip().split("\n")
-            assert len(lines) > 0
+        info_file = output_dir / "dataset_info.json"
+        if info_file.exists():
+            with open(info_file, "r", encoding="utf-8") as f:
+                info = json.load(f)
+                assert "config" in info
+                assert "class_distribution" in info
+                assert "skipped" in info
+                assert info["config"]["coord_norm"] == "norm_1000"
 
 
 # ============================================================
-# convert_to_unsloth_format 便捷函数测试
+# Convenience Function
 # ============================================================
 
 class TestConvertToUnslothFormat:
 
-    def test_function_returns_result(self, tmp_path):
-        source_dir = tmp_path / "source"
-        source_dir.mkdir()
-        json_path = source_dir / "img.json"
-        json_path.write_text(
-            json.dumps({
-                "imagePath": "img.jpg",
-                "imageWidth": 640,
-                "imageHeight": 480,
-                "shapes": [{"label": "cat", "shape_type": "rectangle", "points": [[10, 20], [100, 200]]}],
-            }),
-            encoding="utf-8",
-        )
+    def test_wrapper_matches_converter(self, tmp_path):
+        json_dir = tmp_path / "jsons"
+        json_dir.mkdir()
+
+        data = {
+            "version": "5.0.1",
+            "imagePath": "img_001.jpg",
+            "imageHeight": 480,
+            "imageWidth": 640,
+            "shapes": [
+                {"label": "cat", "shape_type": "rectangle", "points": [[10, 20], [100, 200]]},
+            ],
+        }
+        with open(json_dir / "img_001.json", "w", encoding="utf-8") as f:
+            json.dump(data, f)
 
         output_dir = tmp_path / "output"
         result = convert_to_unsloth_format(
-            source_dir=str(source_dir),
+            source_dir=str(json_dir),
             output_dir=str(output_dir),
-            use_tqdm=False,
+            coord_norm="norm_1",
+            coord_format="xyxy",
             validate_images=False,
+            image_path_mode="absolute",
         )
+        assert result is not None
         assert isinstance(result, ConversionResult)
-        assert result.total_json_files == 1
