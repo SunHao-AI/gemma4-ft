@@ -187,7 +187,7 @@ class LabelMeConverter:
             category_instruction_template: 类别指令模板，使用{category}占位符
             selected_files: 仅转换指定的JSON文件路径列表（如来自均衡选择结果），
                 为None时则扫描source_dir下所有JSON文件
-            output_format: 输出格式模式，"labelme_text"(旧格式) 或 "box_2d_json"(新格式，推荐)
+            output_format: 输出格式模式，"labelme_text"(自然语言格式) 或 "box_2d_json"(JSON格式，推荐)
         """
         from .detection_format import OutputFormat
 
@@ -300,8 +300,12 @@ class LabelMeConverter:
             return f"[{int(bbox.x_min)}, {int(bbox.y_min)}, {int(bbox.x_max)}, {int(bbox.y_max)}]"
 
     def _generate_conversation_messages(self, bboxes: List[BoundingBox]) -> List[Dict]:
-        """生成对话格式消息（返回所有类别）"""
-        user_content = [{"type": "image"}, {"type": "text", "text": self.instruction_text}]
+        """生成对话格式消息（返回所有类别）
+
+        JSONL格式中user content仅包含text，图片路径存储在images字段。
+        训练时由MultimodalDataset将图片嵌入messages content中。
+        """
+        user_content = [{"type": "text", "text": self.instruction_text}]
 
         bbox_descriptions = []
         label_counts = Counter(bbox.label for bbox in bboxes)
@@ -324,7 +328,7 @@ class LabelMeConverter:
     def _generate_category_specific_messages(self, bboxes: List[BoundingBox], target_category: str) -> List[Dict]:
         """生成指定类别的对话格式消息"""
         instruction_text = self.category_instruction_template.format(category=target_category)
-        user_content = [{"type": "image"}, {"type": "text", "text": instruction_text}]
+        user_content = [{"type": "text", "text": instruction_text}]
 
         category_bboxes = [bbox for bbox in bboxes if bbox.label == target_category]
 
@@ -345,42 +349,57 @@ class LabelMeConverter:
 
         return [{"role": "user", "content": user_content}, {"role": "assistant", "content": assistant_content}]
 
+    def _build_box_2d_response(self, bboxes: List[BoundingBox]) -> str:
+        """将边界框列表序列化为 box_2d JSON 字符串（不含 confidence 字段）。
+
+        输出格式示例:
+            [{"box_2d": [0.375, 0.46, 0.4688, 0.5752], "label": "客船"}]
+        坐标顺序: [x_min, y_min, x_max, y_max]，与 prompt 说明保持一致。
+        """
+        import json
+
+        items = []
+        for bbox in bboxes:
+            items.append({
+                "box_2d": [
+                    round(bbox.x_min, 4),
+                    round(bbox.y_min, 4),
+                    round(bbox.x_max, 4),
+                    round(bbox.y_max, 4),
+                ],
+                "label": bbox.label,
+            })
+        return json.dumps(items, ensure_ascii=False)
+
     def _generate_box_2d_json_messages(self, bboxes: List[BoundingBox]) -> List[Dict]:
-        """Generate conversation messages in box_2d_json format (aligned with inference)."""
-        from .detection_format import build_box_2d_json_response
+        """生成 box_2d_json 格式的对话消息（全类别模式）。
 
-        user_content = [{"type": "image"}, {"type": "text", "text": self.instruction_text}]
-
-        bbox_dicts = [
-            {"x_min": bbox.x_min, "y_min": bbox.y_min,
-             "x_max": bbox.x_max, "y_max": bbox.y_max, "label": bbox.label}
-            for bbox in bboxes
-        ]
-        response_text = build_box_2d_json_response(bbox_dicts)
-
+        JSONL格式中user content仅包含text，图片路径存储在images字段。
+        训练时由MultimodalDataset将图片嵌入messages content中。
+        """
+        user_content = [{"type": "text", "text": self.instruction_text}]
+        response_text = self._build_box_2d_response(bboxes)
         assistant_content = [{"type": "text", "text": response_text}]
         return [{"role": "user", "content": user_content}, {"role": "assistant", "content": assistant_content}]
 
     def _generate_category_specific_box_2d_json_messages(
         self, bboxes: List[BoundingBox], target_category: str
     ) -> List[Dict]:
-        """Generate per-category conversation messages in box_2d_json format."""
-        from .detection_format import build_box_2d_json_response
+        """生成 box_2d_json 格式的对话消息（per_category 模式）。
 
+        Bug fix: 原实现错误地将全量 bboxes 传给 build_box_2d_json_response，
+        此处已修正为仅使用属于 target_category 的边界框。
+        """
         instruction_text = self.category_instruction_template.format(category=target_category)
-        user_content = [{"type": "image"}, {"type": "text", "text": instruction_text}]
+        user_content = [{"type": "text", "text": instruction_text}]
 
+        # 只保留目标类别的边界框（修复原有 bug）
         category_bboxes = [bbox for bbox in bboxes if bbox.label == target_category]
 
         if not category_bboxes:
             response_text = "[]"
         else:
-            bbox_dicts = [
-                {"x_min": bbox.x_min, "y_min": bbox.y_min,
-                 "x_max": bbox.x_max, "y_max": bbox.y_max, "label": bbox.label}
-                for bbox in category_bboxes
-            ]
-            response_text = build_box_2d_json_response(bbox_dicts)
+            response_text = self._build_box_2d_response(category_bboxes)
 
         assistant_content = [{"type": "text", "text": response_text}]
         return [{"role": "user", "content": user_content}, {"role": "assistant", "content": assistant_content}]
@@ -448,6 +467,7 @@ class LabelMeConverter:
             for category in unique_categories:
                 category_bboxes = [bbox for bbox in bounding_boxes if bbox.label == category]
                 if self.output_format == OutputFormat.BOX_2D_JSON:
+                    # 传入全量 bboxes，内部方法负责按 category 过滤
                     conversation_messages = self._generate_category_specific_box_2d_json_messages(bounding_boxes, category)
                 else:
                     conversation_messages = self._generate_category_specific_messages(bounding_boxes, category)
@@ -540,7 +560,8 @@ class LabelMeConverter:
         split.records = records
         split.total_records = len(records)
 
-        output_file = self.output_dir / f"{split_name}.jsonl"
+        output_name = "valid" if split_name == "val" else split_name
+        output_file = self.output_dir / f"{output_name}.jsonl"
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
         write_pbar = None
@@ -583,11 +604,6 @@ class LabelMeConverter:
         self.logger.info(f"  图片数: {split.total_images}")
         self.logger.info(f"  对象数: {split.total_objects}")
         self.logger.info(f"  输出路径: {split.output_path}")
-
-        if split_name == "val":
-            valid_file = self.output_dir / "valid.jsonl"
-            valid_file.write_text(output_file.read_text(encoding="utf-8"), encoding="utf-8")
-            self.logger.info(f"  valid别名: {valid_file}")
 
         return split
 
@@ -829,7 +845,7 @@ def convert_to_unsloth_format(
         category_instruction_template: 类别指令模板，使用{category}占位符
         selected_files: 仅转换指定的JSON文件路径列表（如来自均衡选择结果），
             为None时则扫描source_dir下所有JSON文件
-        output_format: 输出格式模式，"labelme_text"(旧格式) 或 "box_2d_json"(新格式，推荐)
+        output_format: 输出格式模式，"labelme_text"(自然语言格式) 或 "box_2d_json"(JSON格式，推荐)
 
     Returns:
         ConversionResult: 转换结果对象
@@ -888,7 +904,7 @@ def main():
     parser.add_argument("--log", help="日志文件路径")
     parser.add_argument("--report", "-r", help="输出JSON报告路径")
     parser.add_argument("--output-format", choices=["labelme_text", "box_2d_json"], default="labelme_text",
-                        help="输出格式模式: labelme_text(旧格式) 或 box_2d_json(新格式，推荐)")
+                        help="输出格式模式: labelme_text(自然语言格式) 或 box_2d_json(JSON格式，推荐)")
 
     args = parser.parse_args()
 

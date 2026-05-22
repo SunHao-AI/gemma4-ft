@@ -110,7 +110,7 @@ class TestDatasetSplit:
             total_images=5,
             total_objects=10,
             label_distribution={"cat": 5, "dog": 5},
-            output_path="/path/val.jsonl",
+            output_path="/path/valid.jsonl",
         )
         d = split.to_dict()
         assert d["split_name"] == "val"
@@ -118,7 +118,7 @@ class TestDatasetSplit:
         assert d["total_images"] == 5
         assert d["total_objects"] == 10
         assert d["label_distribution"]["cat"] == 5
-        assert d["output_path"] == "/path/val.jsonl"
+        assert d["output_path"] == "/path/valid.jsonl"
 
 
 # ============================================================
@@ -324,6 +324,12 @@ class TestLabelMeConverterInternal:
         assert len(messages) == 2
         assert messages[0]["role"] == "user"
         assert messages[1]["role"] == "assistant"
+        # JSONL格式: user content仅包含text，图片路径存储在images字段
+        user_content = messages[0]["content"]
+        assert len(user_content) == 1
+        assert user_content[0]["type"] == "text"
+        # 不应包含 {"type": "image"} 占位符
+        assert not any(item.get("type") == "image" for item in user_content)
 
     def test_generate_category_specific_messages(self, converter):
         bboxes = [
@@ -333,6 +339,10 @@ class TestLabelMeConverterInternal:
         messages = converter._generate_category_specific_messages(bboxes, "cat")
         assert len(messages) == 2
         assert messages[0]["role"] == "user"
+        # JSONL格式: user content仅包含text
+        user_content = messages[0]["content"]
+        assert user_content[0]["type"] == "text"
+        assert not any(item.get("type") == "image" for item in user_content)
 
     def test_split_dataset(self, converter):
         records = [
