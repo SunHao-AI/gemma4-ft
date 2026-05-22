@@ -304,15 +304,14 @@ def _transform_and_format_coords(
     else:
         coords = [x_min, y_min, x_max, y_max]
 
-    # Format based on norm
+    # Coordinates are already normalized by _normalize_bbox() before reaching here.
+    # Only format them for display; do NOT apply additional scaling.
     if coord_norm == "raw":
         return "[" + ", ".join(str(int(round(c))) for c in coords) + "]"
     elif coord_norm == "norm_1":
         return "[" + ", ".join(f"{c:.4f}" for c in coords) + "]"
-    elif coord_norm == "norm_100":
-        return "[" + ", ".join(str(int(round(c * 100))) for c in coords) + "]"
-    elif coord_norm == "norm_1000":
-        return "[" + ", ".join(str(int(round(c * 1000))) for c in coords) + "]"
+    elif coord_norm in ("norm_100", "norm_1000"):
+        return "[" + ", ".join(str(int(round(c))) for c in coords) + "]"
     else:
         return "[" + ", ".join(f"{c:.4f}" for c in coords) + "]"
 
@@ -340,15 +339,14 @@ def _build_box_2d_json_response(
         else:
             raw_coords = [x_min, y_min, x_max, y_max]
 
-        # Scale coordinates based on coord_norm
+        # Coordinates are already normalized by _normalize_bbox() before reaching here.
+        # Only format them for display; do NOT apply additional scaling.
         if coord_norm == "raw":
             scaled_coords = [int(round(c)) for c in raw_coords]
         elif coord_norm == "norm_1":
             scaled_coords = [round(c, 4) for c in raw_coords]
-        elif coord_norm == "norm_100":
-            scaled_coords = [int(round(c * 100)) for c in raw_coords]
-        elif coord_norm == "norm_1000":
-            scaled_coords = [int(round(c * 1000)) for c in raw_coords]
+        elif coord_norm in ("norm_100", "norm_1000"):
+            scaled_coords = [int(round(c)) for c in raw_coords]
         else:
             scaled_coords = [round(c, 4) for c in raw_coords]
 
@@ -464,26 +462,46 @@ def parse_box_2d_json_ground_truth(
     img_width: int,
     img_height: int,
     coord_order: str = "xyxy",
+    coord_norm: str = "auto",
 ) -> List[Dict[str, Any]]:
     """Parse ground truth from box_2d_json format assistant text.
 
     Handles both normalized [x_min, y_min, x_max, y_max] (coord_order="xyxy")
     and legacy [y1, x1, y2, x2] (coord_order="yxxy") in box_2d.
 
+    Args:
+        coord_norm: coordinate normalization mode. "auto" auto-detects from
+            values (norm_1 if all <= 1, else raw pixel). "norm_1000" treats
+            values in [0, 1000] range, dividing by 1000 before scaling to pixels.
+            "norm_1" treats values in [0, 1]. "raw" treats values as pixel coords.
+
     Returns list of dicts with pixel bbox: [x1, y1, x2, y2], label, confidence.
     """
     detections: List[Dict[str, Any]] = []
 
     def _convert(coords: List[float]) -> Tuple[int, int, int, int]:
+        # Determine effective norm: explicit overrides auto-detect
+        effective_norm = coord_norm
+        if effective_norm == "auto":
+            effective_norm = "norm_1" if _is_normalized(coords) else "raw"
+
         if coord_order == "xyxy":
-            if _is_normalized(coords):
+            if effective_norm == "norm_1":
                 return (
                     int(coords[0] * img_width),
                     int(coords[1] * img_height),
                     int(coords[2] * img_width),
                     int(coords[3] * img_height),
                 )
-            return int(coords[0]), int(coords[1]), int(coords[2]), int(coords[3])
+            elif effective_norm == "norm_1000":
+                return (
+                    int(coords[0] / 1000 * img_width),
+                    int(coords[1] / 1000 * img_height),
+                    int(coords[2] / 1000 * img_width),
+                    int(coords[3] / 1000 * img_height),
+                )
+            else:  # raw pixel coords
+                return int(coords[0]), int(coords[1]), int(coords[2]), int(coords[3])
         else:  # yxxy legacy
             scale_x = img_width / 1000.0
             scale_y = img_height / 1000.0
