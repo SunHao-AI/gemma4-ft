@@ -532,6 +532,11 @@ class ModelLoader:
             with quiet_library_output():
                 self.model, self.processor = FastVisionModel.from_pretrained(**from_pretrained_kwargs)
 
+                # 确认注意力实现: 检查模型实际使用的attn kernel
+                _resolved_attn = getattr(self.model.config, "_attn_implementation", None) or getattr(self.model.config, "attn_implementation", None)
+                _requested_attn = self.config.get("attn_implementation")
+                log(f"注意力实现: resolved={_resolved_attn}, requested={_requested_attn}")
+
                 lora_path = self.config.get("lora_adapter_path")
                 if lora_path and os.path.exists(lora_path):
                     write_verbose_console(f"Loading LoRA adapter: {lora_path}")

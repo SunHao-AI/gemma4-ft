@@ -659,6 +659,9 @@ def main():
 
     if is_main_process():
         logger.info(f"模型加载完成，参数量: {model.num_parameters() / 1e9:.2f}B")
+        # 确认注意力实现: 检查模型config的_attn_implementation字段
+        _resolved_attn = getattr(model.config, "_attn_implementation", None) or getattr(model.config, "attn_implementation", None)
+        logger.info(f"注意力实现: config={_resolved_attn}, requested={config.attn_implementation}")
 
     if is_main_process():
         logger.info("正在配置LoRA...")
