@@ -28,7 +28,35 @@ from unsloth_finetune.data.labelme.detection_format import (
 )
 
 
-def configure_matplotlib_for_chinese(plt_module, font_manager=None, warn: bool = False) -> Optional[str]:
+_FONT_CACHE_DIR = Path.home() / ".cache" / "unsloth_fonts"
+_NOTO_SANS_SC_URL = (
+    "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/SimplifiedChinese/"
+    "NotoSansCJKsc-Regular.otf"
+)
+_NOTO_SANS_SC_FILE = "NotoSansCJKsc-Regular.otf"
+
+
+def _download_font(url: str, dest: Path, timeout: int = 30) -> bool:
+    """下载字体文件到本地缓存目录, 返回是否成功"""
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        resp = requests.get(url, timeout=timeout, stream=True)
+        if resp.status_code != 200:
+            return False
+        with open(dest, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=8192):
+                f.write(chunk)
+        return True
+    except Exception:
+        return False
+
+
+def configure_matplotlib_for_chinese(
+    plt_module,
+    font_manager=None,
+    warn: bool = False,
+    auto_download: bool = True,
+) -> Optional[str]:
     chinese_fonts = [
         "SimHei",
         "Microsoft YaHei",
@@ -38,6 +66,9 @@ def configure_matplotlib_for_chinese(plt_module, font_manager=None, warn: bool =
         "WenQuanYi Micro Hei",
         "Noto Sans CJK SC",
         "Source Han Sans SC",
+        # 下载后的字体名称 (Noto CJK OTF 注册名)
+        "Noto Sans CJK SC",
+        "NotoSansCJKsc-Regular",
     ]
     available_fonts = []
     if font_manager is not None:
@@ -48,6 +79,43 @@ def configure_matplotlib_for_chinese(plt_module, font_manager=None, warn: bool =
         if font_name in available_fonts:
             font_found = font_name
             break
+
+    # 系统中未找到中文字体 → 尝试自动下载 Noto Sans CJK SC
+    if font_found is None and auto_download:
+        cached_font = _FONT_CACHE_DIR / _NOTO_SANS_SC_FILE
+        need_download = not cached_font.exists()
+        if need_download:
+            if warn:
+                print("未找到系统中文字体, 正在尝试下载 Noto Sans CJK SC ...")
+            downloaded = _download_font(_NOTO_SANS_SC_URL, cached_font)
+            if downloaded and warn:
+                print(f"字体下载成功: {cached_font}")
+            elif not downloaded and warn:
+                print("字体下载失败, 将回退使用英文字体 (DejaVu Sans)")
+
+        # 无论刚下载还是已有缓存, 尝试注册
+        if cached_font.exists():
+            try:
+                if font_manager is not None:
+                    font_manager.fontManager.addfont(str(cached_font))
+                    # 重新扫描以获取新注册的字体名
+                    available_fonts = [
+                        font.name for font in font_manager.fontManager.ttflist
+                    ]
+                    for font_name in chinese_fonts:
+                        if font_name in available_fonts:
+                            font_found = font_name
+                            break
+                # 也直接尝试用路径注册
+                if font_found is None:
+                    import matplotlib.font_manager as _fm
+                    _fm.fontManager.addfont(str(cached_font))
+                    for fn in chinese_fonts:
+                        if fn in [f.name for f in _fm.fontManager.ttflist]:
+                            font_found = fn
+                            break
+            except Exception:
+                pass
 
     if font_found:
         plt_module.rcParams["font.sans-serif"] = [font_found, "DejaVu Sans"]
@@ -608,6 +676,14 @@ class DetectionVisualizer:
                         return ImageFont.truetype(str(font_path), self.font_size)
                     except Exception:
                         pass
+
+        # 系统字体均不可用 → 尝试使用下载缓存的 Noto Sans CJK SC
+        cached_font = _FONT_CACHE_DIR / _NOTO_SANS_SC_FILE
+        if cached_font.exists():
+            try:
+                return ImageFont.truetype(str(cached_font), self.font_size)
+            except Exception:
+                pass
 
         try:
             return ImageFont.load_default(size=self.font_size)
