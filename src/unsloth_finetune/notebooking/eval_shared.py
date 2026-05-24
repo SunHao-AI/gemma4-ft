@@ -218,7 +218,7 @@ class DatasetLoader:
         # Try box_2d_json format first
         if output_format == "box_2d_json" or assistant_text.strip().startswith("["):
             json_detections = parse_box_2d_json_ground_truth(
-                assistant_text, img_width, img_height, coord_order="xyxy"
+                assistant_text, img_width, img_height
             )
             if json_detections:
                 return json_detections

@@ -4,9 +4,12 @@ Provides a consistent detection format from training through inference,
 resolving the format mismatch that causes finetuned models to lose
 bounding box output capability.
 
-Two format modes:
-- LABELME_TEXT: legacy Chinese free-text with [x_min, y_min, x_max, y_max]
+Format modes:
+- LABELME_TEXT: Chinese free-text with [x_min, y_min, x_max, y_max] normalized
 - BOX_2D_JSON: JSON array with box_2d keys, normalized [x_min, y_min, x_max, y_max]
+
+Coordinate formats (xyxy, xywh, cxcywh) are standard CV formats — no legacy
+non-standard orderings.
 
 Also provides a prompt template registry for generating detection prompts
 in multiple languages and styles.
@@ -41,6 +44,31 @@ class CoordFormat(str, Enum):
     XYXY = "xyxy"
     XYWH = "xywh"
     CXCYWH = "cxcywh"
+
+
+def convert_xyxy_to_format(
+    x1: float, y1: float, x2: float, y2: float,
+    coord_format: str = "xyxy",
+) -> List[float]:
+    """Convert xyxy pixel coordinates to the requested output format.
+
+    Args:
+        x1, y1, x2, y2: pixel coordinates in xyxy format
+        coord_format: "xyxy", "xywh", or "cxcywh"
+
+    Returns:
+        List of 4 floats in the requested format.
+    """
+    if coord_format == "xyxy":
+        return [x1, y1, x2, y2]
+    elif coord_format == "xywh":
+        return [x1, y1, x2 - x1, y2 - y1]
+    elif coord_format == "cxcywh":
+        cx = (x1 + x2) / 2
+        cy = (y1 + y2) / 2
+        return [cx, cy, x2 - x1, y2 - y1]
+    else:
+        raise ValueError(f"Unknown coord_format: {coord_format}. Must be xyxy, xywh, or cxcywh.")
 
 
 class GenStrategy(str, Enum):
@@ -80,7 +108,7 @@ class PromptStyle(str, Enum):
 class DetectionFormatSpec:
     """Specification for a detection format."""
     name: str
-    coordinate_order: str        # "xyxy" or "yxxy"
+    coordinate_format: str       # "xyxy", "xywh", or "cxcywh"
     coordinate_scale: str        # "raw", "norm_1", "norm_100", "norm_1000"
     response_structure: str      # "json_array" or "free_text"
     confidence_included: bool
@@ -89,14 +117,14 @@ class DetectionFormatSpec:
 FORMAT_SPECS: Dict[OutputFormat, DetectionFormatSpec] = {
     OutputFormat.LABELME_TEXT: DetectionFormatSpec(
         name="labelme_text",
-        coordinate_order="xyxy",
+        coordinate_format="xyxy",
         coordinate_scale="norm_1",
         response_structure="free_text",
         confidence_included=False,
     ),
     OutputFormat.BOX_2D_JSON: DetectionFormatSpec(
         name="box_2d_json",
-        coordinate_order="xyxy",
+        coordinate_format="xyxy",
         coordinate_scale="norm_1",
         response_structure="json_array",
         confidence_included=True,
@@ -461,13 +489,11 @@ def parse_box_2d_json_ground_truth(
     assistant_text: str,
     img_width: int,
     img_height: int,
-    coord_order: str = "xyxy",
     coord_norm: str = "auto",
 ) -> List[Dict[str, Any]]:
     """Parse ground truth from box_2d_json format assistant text.
 
-    Handles both normalized [x_min, y_min, x_max, y_max] (coord_order="xyxy")
-    and legacy [y1, x1, y2, x2] (coord_order="yxxy") in box_2d.
+    Always interprets coordinates as [x_min, y_min, x_max, y_max] (xyxy order).
 
     Args:
         coord_norm: coordinate normalization mode. "auto" auto-detects from
@@ -485,39 +511,22 @@ def parse_box_2d_json_ground_truth(
         if effective_norm == "auto":
             effective_norm = "norm_1" if _is_normalized(coords) else "raw"
 
-        if coord_order == "xyxy":
-            if effective_norm == "norm_1":
-                return (
-                    int(coords[0] * img_width),
-                    int(coords[1] * img_height),
-                    int(coords[2] * img_width),
-                    int(coords[3] * img_height),
-                )
-            elif effective_norm == "norm_1000":
-                return (
-                    int(coords[0] / 1000 * img_width),
-                    int(coords[1] / 1000 * img_height),
-                    int(coords[2] / 1000 * img_width),
-                    int(coords[3] / 1000 * img_height),
-                )
-            else:  # raw pixel coords
-                return int(coords[0]), int(coords[1]), int(coords[2]), int(coords[3])
-        else:  # yxxy legacy
-            scale_x = img_width / 1000.0
-            scale_y = img_height / 1000.0
-            if _is_normalized(coords):
-                return (
-                    int(coords[1] * img_width),
-                    int(coords[0] * img_height),
-                    int(coords[3] * img_width),
-                    int(coords[2] * img_height),
-                )
+        if effective_norm == "norm_1":
             return (
-                int(coords[1] * scale_x),
-                int(coords[0] * scale_y),
-                int(coords[3] * scale_x),
-                int(coords[2] * scale_y),
+                int(coords[0] * img_width),
+                int(coords[1] * img_height),
+                int(coords[2] * img_width),
+                int(coords[3] * img_height),
             )
+        elif effective_norm == "norm_1000":
+            return (
+                int(coords[0] / 1000 * img_width),
+                int(coords[1] / 1000 * img_height),
+                int(coords[2] / 1000 * img_width),
+                int(coords[3] / 1000 * img_height),
+            )
+        else:  # raw pixel coords
+            return int(coords[0]), int(coords[1]), int(coords[2]), int(coords[3])
 
     # Try full JSON array extraction
     json_str = _extract_json_array(assistant_text)

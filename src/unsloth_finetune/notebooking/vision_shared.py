@@ -24,7 +24,7 @@ from unsloth_finetune.data.labelme.detection_format import (
     DetectionPromptBuilder,
     build_cn_normalized_detection_prompt,
     build_en_normalized_detection_prompt,
-    parse_box_2d_json_ground_truth,
+    convert_xyxy_to_format,
 )
 
 
@@ -70,40 +70,6 @@ def print_torch_runtime_info(torch_module: Any, version_label: str = "PyTorch �
         print(f"CUDA版本: {torch_module.version.cuda}")
     else:
         print("警告: 未检测到 GPU")
-
-
-def build_cn_detection_prompt(query: str) -> str:
-    return f"""请仔细分析这张图片，{query}。
-
-如果检测到目标，请严格按照以下JSON格式返回检测结果（不要添加其他文字说明）:
-[
-  {{"box_2d": [y1, x1, y2, x2], "label": "目标类别", "confidence": 置信度}}
-]
-
-坐标说明:
-- box_2d: 边界框坐标 [y1, x1, y2, x2]，基于1000x1000坐标系
-- y1, y2: 垂直方向坐标 (0-1000)，y1 < y2
-- x1, x2: 水平方向坐标 (0-1000)，x1 < x2
-- confidence: 置信度分数 (0.0-1.0)
-
-如果未检测到目标，请返回空数组: []"""
-
-
-def build_en_detection_prompt(query: str) -> str:
-    return f"""Analyze this image carefully. {query}
-
-If the target is present, return only a JSON array with this schema:
-[
-  {{"box_2d": [y1, x1, y2, x2], "label": "target", "confidence": 0.95}}
-]
-
-Coordinate rules:
-- box_2d uses [y1, x1, y2, x2]
-- coordinates are in a 1000x1000 space
-- y1 < y2 and x1 < x2
-- confidence must be between 0.0 and 1.0
-
-If no target is found, return []"""
 
 
 class ModelLoader:
@@ -294,17 +260,17 @@ class ObjectDetector:
     def __init__(
         self,
         model_loader: ModelLoader,
-        prompt_builder: DetectionPromptBuilder = build_en_detection_prompt,
+        prompt_builder: DetectionPromptBuilder = build_en_normalized_detection_prompt,
         temperature: float = 0.7,
         top_p: float = 0.9,
-        coord_order: str = "xyxy",
+        coord_format: str = "xyxy",
         coord_norm: str = "auto",
     ):
         self.model_loader = model_loader
         self.prompt_builder = prompt_builder
         self.temperature = float(temperature)
         self.top_p = float(top_p)
-        self.coord_order = coord_order
+        self.coord_format = coord_format
         self.coord_norm = coord_norm
 
     def _resolve_model_device(self, model) -> torch.device:
@@ -395,7 +361,7 @@ class ObjectDetector:
             width, height = image.size
             detections = self.parse_response(
                 response, width, height,
-                coord_order=self.coord_order,
+                coord_format=self.coord_format,
                 coord_norm=self.coord_norm,
             )
             return {
@@ -445,7 +411,7 @@ class ObjectDetector:
                     width, height = image.size
                     detections = self.parse_response(
                         response, width, height,
-                        coord_order=self.coord_order,
+                        coord_format=self.coord_format,
                         coord_norm=self.coord_norm,
                     )
                     results.append(
@@ -469,7 +435,7 @@ class ObjectDetector:
         response: str,
         width: int,
         height: int,
-        coord_order: str = "xyxy",
+        coord_format: str = "xyxy",
         coord_norm: str = "auto",
     ) -> List[Dict[str, Any]]:
         detections: List[Dict[str, Any]] = []
@@ -491,35 +457,18 @@ class ObjectDetector:
 
         def convert_coords(coords: list) -> Tuple[int, int, int, int]:
             eff = _effective_norm(coords)
-            if coord_order == "xyxy":
-                if eff == "norm_1":
-                    x1 = int(coords[0] * width)
-                    y1 = int(coords[1] * height)
-                    x2 = int(coords[2] * width)
-                    y2 = int(coords[3] * height)
-                elif eff == "norm_1000":
-                    x1 = int(coords[0] / 1000 * width)
-                    y1 = int(coords[1] / 1000 * height)
-                    x2 = int(coords[2] / 1000 * width)
-                    y2 = int(coords[3] / 1000 * height)
-                else:  # raw pixel coords
-                    x1, y1, x2, y2 = int(coords[0]), int(coords[1]), int(coords[2]), int(coords[3])
-            else:  # xyxy legacy
-                if eff == "norm_1":
-                    x1 = int(coords[1] * width)
-                    y1 = int(coords[0] * height)
-                    x2 = int(coords[3] * width)
-                    y2 = int(coords[2] * height)
-                elif eff == "norm_1000":
-                    x1 = int(coords[1] / 1000 * width)
-                    y1 = int(coords[0] / 1000 * height)
-                    x2 = int(coords[3] / 1000 * width)
-                    y2 = int(coords[2] / 1000 * height)
-                else:  # raw pixel coords
-                    x1 = int(coords[1])
-                    y1 = int(coords[0])
-                    x2 = int(coords[3])
-                    y2 = int(coords[2])
+            if eff == "norm_1":
+                x1 = int(coords[0] * width)
+                y1 = int(coords[1] * height)
+                x2 = int(coords[2] * width)
+                y2 = int(coords[3] * height)
+            elif eff == "norm_1000":
+                x1 = int(coords[0] / 1000 * width)
+                y1 = int(coords[1] / 1000 * height)
+                x2 = int(coords[2] / 1000 * width)
+                y2 = int(coords[3] / 1000 * height)
+            else:  # raw pixel coords
+                x1, y1, x2, y2 = int(coords[0]), int(coords[1]), int(coords[2]), int(coords[3])
             return x1, y1, x2, y2
 
         def sanitize_box(x1: int, y1: int, x2: int, y2: int):
@@ -569,6 +518,9 @@ class ObjectDetector:
             detections.append(
                 {
                     "bbox": [sanitized[0], sanitized[1], sanitized[2], sanitized[3]],
+                    "bbox_out": convert_xyxy_to_format(
+                        sanitized[0], sanitized[1], sanitized[2], sanitized[3], coord_format
+                    ),
                     "label": item.get("label", "object"),
                     "confidence": max(0.0, min(confidence, 1.0)),
                 }
@@ -786,10 +738,10 @@ class ObjectDetectionPipeline:
     def __init__(
         self,
         model_config: Dict[str, Any],
-        prompt_builder: DetectionPromptBuilder = build_cn_detection_prompt,
+        prompt_builder: DetectionPromptBuilder = build_cn_normalized_detection_prompt,
         temperature: float = 0.7,
         top_p: float = 0.9,
-        coord_order: str = "xyxy",
+        coord_format: str = "xyxy",
         coord_norm: str = "auto",
     ):
         self.model_loader = ModelLoader(model_config)
@@ -800,7 +752,7 @@ class ObjectDetectionPipeline:
             prompt_builder=prompt_builder,
             temperature=temperature,
             top_p=top_p,
-            coord_order=coord_order,
+            coord_format=coord_format,
             coord_norm=coord_norm,
         )
         self._initialized = False
@@ -843,7 +795,7 @@ class ObjectDetectionPipeline:
         detections = detection_result.get("detections", [])
         result["raw_response"] = detection_result.get("raw_response", "")
         print(f"\n[DEBUG] 模型原始响应:\n{result['raw_response']}\n")
-        print(f"[DEBUG] coord_order={self.detector.coord_order}, coord_norm={self.detector.coord_norm}")
+        print(f"[DEBUG] coord_format={self.detector.coord_format}, coord_norm={self.detector.coord_norm}")
         if detections:
             raw_coords = []
             for d in detection_result.get("detections", []):

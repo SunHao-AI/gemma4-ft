@@ -46,6 +46,7 @@ from .detection_format import (
     build_cn_normalized_detection_prompt,
     build_en_normalized_detection_prompt,
     parse_box_2d_json_ground_truth,
+    convert_xyxy_to_format,
     DetectionPromptBuilder,
 )
 from .labelme_sampler import (
@@ -102,6 +103,7 @@ __all__ = [
     "build_cn_normalized_detection_prompt",
     "build_en_normalized_detection_prompt",
     "parse_box_2d_json_ground_truth",
+    "convert_xyxy_to_format",
     "DetectionPromptBuilder",
     # Sampling
     "select_balanced_samples",

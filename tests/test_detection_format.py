@@ -13,6 +13,7 @@ from unsloth_finetune.data.labelme.detection_format import (
     build_cn_normalized_detection_prompt,
     build_en_normalized_detection_prompt,
     parse_box_2d_json_ground_truth,
+    convert_xyxy_to_format,
     _extract_json_array,
     _is_normalized,
 )
@@ -50,13 +51,13 @@ class TestDetectionFormatSpec:
     def test_dataclass_fields(self):
         spec = DetectionFormatSpec(
             name="test",
-            coordinate_order="xyxy",
+            coordinate_format="xyxy",
             coordinate_scale="norm_1",
             response_structure="json_array",
             confidence_included=True,
         )
         assert spec.name == "test"
-        assert spec.coordinate_order == "xyxy"
+        assert spec.coordinate_format == "xyxy"
         assert spec.coordinate_scale == "norm_1"
         assert spec.response_structure == "json_array"
         assert spec.confidence_included is True
@@ -69,7 +70,7 @@ class TestDetectionFormatSpec:
     def test_labelme_text_spec_values(self):
         spec = FORMAT_SPECS[OutputFormat.LABELME_TEXT]
         assert spec.name == "labelme_text"
-        assert spec.coordinate_order == "xyxy"
+        assert spec.coordinate_format == "xyxy"
         assert spec.coordinate_scale == "norm_1"
         assert spec.response_structure == "free_text"
         assert spec.confidence_included is False
@@ -77,7 +78,7 @@ class TestDetectionFormatSpec:
     def test_box_2d_json_spec_values(self):
         spec = FORMAT_SPECS[OutputFormat.BOX_2D_JSON]
         assert spec.name == "box_2d_json"
-        assert spec.coordinate_order == "xyxy"
+        assert spec.coordinate_format == "xyxy"
         assert spec.coordinate_scale == "norm_1"
         assert spec.response_structure == "json_array"
         assert spec.confidence_included is True
@@ -271,33 +272,6 @@ class TestParseBox2dJsonGroundTruth:
         assert len(result) == 1
         assert result[0]["bbox"] == [64, 96, 320, 384]
 
-    # -- coord_order differences --
-
-    def test_xyxy_vs_yxxy_produces_different_pixel_results(self):
-        """Same raw coords [0.1, 0.2, 0.5, 0.8] should produce different pixel
-        boxes depending on coord_order."""
-        coords = [0.1, 0.2, 0.5, 0.8]
-        text = json.dumps([
-            {"box_2d": coords, "label": "obj", "confidence": 0.9}
-        ])
-        result_xyxy = parse_box_2d_json_ground_truth(text, 640, 480, coord_order="xyxy")
-        result_yxxy = parse_box_2d_json_ground_truth(text, 640, 480, coord_order="yxxy")
-        # xyxy: x1=0.1*640, y1=0.2*480, x2=0.5*640, y2=0.8*480
-        assert result_xyxy[0]["bbox"] == [64, 96, 320, 384]
-        # yxxy normalized: x1=0.2*640, y1=0.1*480, x2=0.8*640, y2=0.5*480
-        assert result_yxxy[0]["bbox"] == [128, 48, 512, 240]
-        assert result_xyxy[0]["bbox"] != result_yxxy[0]["bbox"]
-
-    def test_yxxy_non_normalized_coords(self):
-        """yxxy with pixel-scale coords uses 1000x1000 scaling."""
-        text = json.dumps([
-            {"box_2d": [200, 100, 800, 500], "label": "obj", "confidence": 0.9}
-        ])
-        # These coords > 1 so _is_normalized returns False.
-        # yxxy non-normalized: x1=100*640/1000, y1=200*480/1000, x2=500*640/1000, y2=800*480/1000
-        result = parse_box_2d_json_ground_truth(text, 640, 480, coord_order="yxxy")
-        assert result[0]["bbox"] == [64, 96, 320, 384]
-
     # -- malformed input --
 
     def test_malformed_json_returns_empty(self):
@@ -346,7 +320,7 @@ class TestParseBox2dJsonGroundTruth:
         text = json.dumps([
             {"box_2d": [64, 96, 320, 384], "label": "cat", "confidence": 0.9}
         ])
-        result = parse_box_2d_json_ground_truth(text, 640, 480, coord_order="xyxy")
+        result = parse_box_2d_json_ground_truth(text, 640, 480)
         assert result[0]["bbox"] == [64, 96, 320, 384]
 
     # -- confidence defaulting --
@@ -457,3 +431,29 @@ class TestIsNormalized:
 
     def test_exact_boundary_values(self):
         assert _is_normalized([0.0, 1.0]) is True
+
+
+# ---------------------------------------------------------------------------
+# 9. convert_xyxy_to_format
+# ---------------------------------------------------------------------------
+
+class TestConvertXyxyToFormat:
+    def test_xyxy_passthrough(self):
+        result = convert_xyxy_to_format(10, 20, 100, 200, "xyxy")
+        assert result == [10, 20, 100, 200]
+
+    def test_xywh_conversion(self):
+        result = convert_xyxy_to_format(10, 20, 100, 200, "xywh")
+        assert result == [10, 20, 90, 180]
+
+    def test_cxcywh_conversion(self):
+        result = convert_xyxy_to_format(10, 20, 100, 200, "cxcywh")
+        assert result == [55.0, 110.0, 90, 180]
+
+    def test_invalid_format_raises(self):
+        with pytest.raises(ValueError, match="Unknown coord_format"):
+            convert_xyxy_to_format(10, 20, 100, 200, "yxxy")
+
+    def test_xyxy_is_default(self):
+        result = convert_xyxy_to_format(10, 20, 100, 200)
+        assert result == [10, 20, 100, 200]

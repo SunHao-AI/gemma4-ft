@@ -40,7 +40,7 @@ from unsloth_finetune.data.labelme.detection_format import (
     DetectionPromptBuilder,
     build_cn_normalized_detection_prompt,
     build_en_normalized_detection_prompt,
-    parse_box_2d_json_ground_truth,
+    convert_xyxy_to_format,
 )
 
 NOTEBOOK_DIR = resolve_notebook_dir(
@@ -373,7 +373,7 @@ class DatasetLoader:
         return records
 
     @staticmethod
-    def parse_ground_truth(record: Dict, coord_order: str = "yxxy") -> List[Dict]:
+    def parse_ground_truth(record: Dict) -> List[Dict]:
         metadata = record.get("metadata", {})
         img_width = metadata.get("image_width", 1000)
         img_height = metadata.get("image_height", 1000)
@@ -395,7 +395,7 @@ class DatasetLoader:
         if output_format == "box_2d_json" or assistant_text.lstrip().startswith("["):
             try:
                 box_2d_results = parse_box_2d_json_ground_truth(
-                    assistant_text, img_width, img_height, coord_order=coord_order
+                    assistant_text, img_width, img_height
                 )
                 if box_2d_results:
                     return box_2d_results
@@ -583,10 +583,10 @@ class ModelLoader:
 class ObjectDetector:
     def __init__(self, model_loader: ModelLoader,
                  prompt_builder: Optional[DetectionPromptBuilder] = None,
-                 coord_order: str = "yxxy"):
+                 coord_format: str = "xyxy"):
         self.model_loader = model_loader
         self.prompt_builder = prompt_builder
-        self.coord_order = coord_order
+        self.coord_format = coord_format
 
     def _build_prompt(self, query: str) -> str:
         query_text = str(query or "").strip()
@@ -606,22 +606,7 @@ class ObjectDetector:
 
         if self.prompt_builder:
             return self.prompt_builder(query_text)
-        # Legacy default: 1000x1000 y-first format
-        return f"""Analyze this image carefully. {query_text}
-
-If the target is present, return only a JSON array with this schema:
-[
-  {{"box_2d": [y1, x1, y2, x2], "label": "target", "confidence": 0.95}}
-]
-
-Coordinate rules:
-- box_2d uses [y1, x1, y2, x2]
-- coordinates are in a 1000x1000 space
-- y1 < y2 and x1 < x2
-- confidence must be between 0.0 and 1.0
-
-If no target is found, return []"""
-
+        return build_en_normalized_detection_prompt(query_text)
     def _resolve_model_device(self, model) -> torch.device:
         model_device = getattr(model, "device", None)
         if model_device is not None:
@@ -706,7 +691,7 @@ If no target is found, return []"""
 
             response = self._decode_generated_responses(processor, inputs, outputs)[0]
             width, height = image.size
-            detections = self._parse_response(response, width, height, coord_order=self.coord_order)
+            detections = self._parse_response(response, width, height, coord_format=self.coord_format)
             return {"success": True, "raw_response": response, "detections": detections, "query": query}
         except Exception as exc:
             return {"error": str(exc), "success": False}
@@ -747,7 +732,7 @@ If no target is found, return []"""
                 responses = self._decode_generated_responses(processor, inputs, outputs)
                 for image, query, response in zip(image_batch, query_batch, responses):
                     width, height = image.size
-                    detections = self._parse_response(response, width, height, coord_order=self.coord_order)
+                    detections = self._parse_response(response, width, height, coord_format=self.coord_format)
                     results.append(
                         {
                             "success": True,
@@ -765,37 +750,23 @@ If no target is found, return []"""
         return results
 
     def _parse_response(self, response: str, width: int, height: int,
-                        coord_order: str = "yxxy") -> List[Dict[str, Any]]:
+                        coord_format: str = "xyxy") -> List[Dict[str, Any]]:
         detections = []
-        scale_1000_x = width / 1000.0
-        scale_1000_y = height / 1000.0
 
         def is_normalized(coords: list) -> bool:
             return all(0 <= v <= 1 for v in coords)
 
         def convert_coords(coords: list) -> Tuple[int, int, int, int]:
-            if coord_order == "xyxy":
-                if is_normalized(coords):
-                    x1 = int(coords[0] * width)
-                    y1 = int(coords[1] * height)
-                    x2 = int(coords[2] * width)
-                    y2 = int(coords[3] * height)
-                else:
-                    x1 = int(coords[0])
-                    y1 = int(coords[1])
-                    x2 = int(coords[2])
-                    y2 = int(coords[3])
-            else:  # yxxy legacy - keep existing logic
-                if is_normalized(coords):
-                    x1 = int(coords[1] * width)
-                    y1 = int(coords[0] * height)
-                    x2 = int(coords[3] * width)
-                    y2 = int(coords[2] * height)
-                else:
-                    x1 = int(coords[1] * scale_1000_x)
-                    y1 = int(coords[0] * scale_1000_y)
-                    x2 = int(coords[3] * scale_1000_x)
-                    y2 = int(coords[2] * scale_1000_y)
+            if is_normalized(coords):
+                x1 = int(coords[0] * width)
+                y1 = int(coords[1] * height)
+                x2 = int(coords[2] * width)
+                y2 = int(coords[3] * height)
+            else:
+                x1 = int(coords[0])
+                y1 = int(coords[1])
+                x2 = int(coords[2])
+                y2 = int(coords[3])
             return x1, y1, x2, y2
 
         def sanitize_box(x1: int, y1: int, x2: int, y2: int):
@@ -840,6 +811,9 @@ If no target is found, return []"""
             detections.append(
                 {
                     "bbox": [sanitized[0], sanitized[1], sanitized[2], sanitized[3]],
+                    "bbox_out": convert_xyxy_to_format(
+                        sanitized[0], sanitized[1], sanitized[2], sanitized[3], coord_format
+                    ),
                     "label": item.get("label", "object"),
                     "confidence": max(0.0, min(confidence, 1.0)),
                 }
@@ -1159,7 +1133,7 @@ def run_model_round(
     local_rank: int,
     physical_gpu: int,
     prompt_builder: Optional[DetectionPromptBuilder] = None,
-    coord_order: str = "yxxy",
+    coord_format: str = "xyxy",
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     worker_start = time.time()
     load_start = time.time()
@@ -1186,7 +1160,7 @@ def run_model_round(
             "state": "failed",
         }
 
-    detector = ObjectDetector(loader, prompt_builder=prompt_builder, coord_order=coord_order)
+    detector = ObjectDetector(loader, prompt_builder=prompt_builder, coord_format=coord_format)
     results = []
     processed = 0
     failed = 0
@@ -1211,7 +1185,7 @@ def run_model_round(
                 try:
                     image_path = DatasetLoader.extract_image_path(record)
                     query = DatasetLoader.extract_query(record)
-                    ground_truth = DatasetLoader.parse_ground_truth(record, coord_order=coord_order)
+                    ground_truth = DatasetLoader.parse_ground_truth(record)
                     image = DatasetLoader.load_image(image_path)
                     if image is None:
                         failed += 1
@@ -1308,7 +1282,7 @@ def run_model_round_dynamic(
     physical_gpu: int,
     result_dir: Path,
     prompt_builder: Optional[DetectionPromptBuilder] = None,
-    coord_order: str = "yxxy",
+    coord_format: str = "xyxy",
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     queue_db_path = get_queue_db_path(result_dir, model_type)
     task_queue = SQLiteTaskQueue(queue_db_path)
@@ -1348,7 +1322,7 @@ def run_model_round_dynamic(
             "state": "failed",
         }
 
-    detector = ObjectDetector(loader, prompt_builder=prompt_builder, coord_order=coord_order)
+    detector = ObjectDetector(loader, prompt_builder=prompt_builder, coord_format=coord_format)
     results: List[Dict[str, Any]] = []
     processed = 0
     failed = 0
@@ -1414,7 +1388,7 @@ def run_model_round_dynamic(
                 try:
                     image_path = DatasetLoader.extract_image_path(record)
                     query = DatasetLoader.extract_query(record)
-                    ground_truth = DatasetLoader.parse_ground_truth(record, coord_order=coord_order)
+                    ground_truth = DatasetLoader.parse_ground_truth(record)
                     image = DatasetLoader.load_image(image_path)
                     if image is None:
                         failed += 1
@@ -1590,9 +1564,8 @@ def parse_args():
     parser.add_argument("--scheduler_mode", choices=("static_partition", "dynamic_queue"), default="static_partition")
     parser.add_argument("--partition_strategy", choices=("contiguous", "round_robin"), default="round_robin")
     parser.add_argument("--queue_batch_size", type=int, default=None)
-    parser.add_argument("--prompt_format", choices=("normalized_xyxy", "legacy_1000x1000"), default="normalized_xyxy")
-    parser.add_argument("--coord_order", choices=("xyxy", "yxxy"), default=None,
-                        help="坐标顺序: xyxy 或 yxxy. 默认随 prompt_format 自动推导 (normalized_xyxy->xyxy, legacy->yxxy)")
+    parser.add_argument("--coord_format", choices=("xyxy", "xywh", "cxcywh"), default="xyxy",
+                        help="输出bbox格式: xyxy, xywh, 或 cxcywh")
     parser.add_argument("--attn_implementation", type=str, default=None,
                         choices=["sdpa", "flash_attention_2", "eager"],
                         help="注意力实现方式: sdpa(推荐), flash_attention_2, eager. None则由Unsloth自动选择")
@@ -1610,16 +1583,9 @@ def main():
     INFERENCE_TOP_P = args.top_p
     INFERENCE_MAX_NEW_TOKENS = args.max_new_tokens
 
-    # Resolve prompt builder and coord order from prompt_format
-    if args.prompt_format == "normalized_xyxy":
-        prompt_builder = build_cn_normalized_detection_prompt
-        coord_order = "xyxy"
-    else:  # legacy_1000x1000
-        prompt_builder = None
-        coord_order = "yxxy"
-    # CLI --coord_order overrides the prompt_format-derived default
-    if args.coord_order is not None:
-        coord_order = args.coord_order
+    # Resolve prompt builder (always normalized xyxy) and coord format
+    prompt_builder = build_cn_normalized_detection_prompt
+    coord_format = args.coord_format
 
     rank = None
     try:
@@ -1679,11 +1645,11 @@ def main():
                 physical_gpu,
                 result_dir,
                 prompt_builder=prompt_builder,
-                coord_order=coord_order,
+                coord_format=coord_format,
             )
         else:
             ft_results, ft_stats = run_model_round("finetuned", partition_records, args, rank, local_rank, physical_gpu,
-                                                              prompt_builder=prompt_builder, coord_order=coord_order)
+                                                              prompt_builder=prompt_builder, coord_format=coord_format)
         barrier()
         if args.scheduler_mode == "dynamic_queue" and rank == 0:
             ft_snapshot = validate_dynamic_queue_round(
@@ -1743,11 +1709,11 @@ def main():
                 physical_gpu,
                 result_dir,
                 prompt_builder=prompt_builder,
-                coord_order=coord_order,
+                coord_format=coord_format,
             )
         else:
             base_results, base_stats = run_model_round("base", partition_records, args, rank, local_rank, physical_gpu,
-                                                          prompt_builder=prompt_builder, coord_order=coord_order)
+                                                          prompt_builder=prompt_builder, coord_format=coord_format)
         barrier()
         if args.scheduler_mode == "dynamic_queue" and rank == 0:
             base_snapshot = validate_dynamic_queue_round(
