@@ -297,13 +297,15 @@ class ObjectDetector:
         prompt_builder: DetectionPromptBuilder = build_en_detection_prompt,
         temperature: float = 0.7,
         top_p: float = 0.9,
-        coord_order: str = "yxxy",
+        coord_order: str = "xyxy",
+        coord_norm: str = "auto",
     ):
         self.model_loader = model_loader
         self.prompt_builder = prompt_builder
         self.temperature = float(temperature)
         self.top_p = float(top_p)
         self.coord_order = coord_order
+        self.coord_norm = coord_norm
 
     def _resolve_model_device(self, model) -> torch.device:
         model_device = getattr(model, "device", None)
@@ -391,7 +393,11 @@ class ObjectDetector:
 
             response = self._decode_generated_responses(processor, inputs, outputs)[0]
             width, height = image.size
-            detections = self.parse_response(response, width, height, coord_order=self.coord_order)
+            detections = self.parse_response(
+                response, width, height,
+                coord_order=self.coord_order,
+                coord_norm=self.coord_norm,
+            )
             return {
                 "success": True,
                 "raw_response": response,
@@ -437,7 +443,11 @@ class ObjectDetector:
                 responses = self._decode_generated_responses(processor, inputs, outputs)
                 for image, query, response in zip(image_batch, query_batch, responses):
                     width, height = image.size
-                    detections = self.parse_response(response, width, height, coord_order=self.coord_order)
+                    detections = self.parse_response(
+                        response, width, height,
+                        coord_order=self.coord_order,
+                        coord_norm=self.coord_norm,
+                    )
                     results.append(
                         {
                             "success": True,
@@ -455,37 +465,61 @@ class ObjectDetector:
         return results
 
     @staticmethod
-    def parse_response(response: str, width: int, height: int, coord_order: str = "yxxy") -> List[Dict[str, Any]]:
+    def parse_response(
+        response: str,
+        width: int,
+        height: int,
+        coord_order: str = "xyxy",
+        coord_norm: str = "auto",
+    ) -> List[Dict[str, Any]]:
         detections: List[Dict[str, Any]] = []
-        scale_1000_x = width / 1000.0
-        scale_1000_y = height / 1000.0
 
-        def is_normalized(coords: list) -> bool:
-            return all(0 <= value <= 1 for value in coords)
+        def _is_normalized(coords: list) -> bool:
+            return all(0 <= v <= 1 for v in coords)
+
+        def _is_1000_based(coords: list) -> bool:
+            return all(0 <= v <= 1000 for v in coords) and not _is_normalized(coords)
+
+        def _effective_norm(coords: list) -> str:
+            if coord_norm != "auto":
+                return coord_norm
+            if _is_normalized(coords):
+                return "norm_1"
+            if _is_1000_based(coords):
+                return "norm_1000"
+            return "raw"
 
         def convert_coords(coords: list) -> Tuple[int, int, int, int]:
+            eff = _effective_norm(coords)
             if coord_order == "xyxy":
-                if is_normalized(coords):
+                if eff == "norm_1":
                     x1 = int(coords[0] * width)
                     y1 = int(coords[1] * height)
                     x2 = int(coords[2] * width)
                     y2 = int(coords[3] * height)
-                else:
-                    x1 = int(coords[0])
-                    y1 = int(coords[1])
-                    x2 = int(coords[2])
-                    y2 = int(coords[3])
-            else:  # yxxy legacy
-                if is_normalized(coords):
+                elif eff == "norm_1000":
+                    x1 = int(coords[0] / 1000 * width)
+                    y1 = int(coords[1] / 1000 * height)
+                    x2 = int(coords[2] / 1000 * width)
+                    y2 = int(coords[3] / 1000 * height)
+                else:  # raw pixel coords
+                    x1, y1, x2, y2 = int(coords[0]), int(coords[1]), int(coords[2]), int(coords[3])
+            else:  # xyxy legacy
+                if eff == "norm_1":
                     x1 = int(coords[1] * width)
                     y1 = int(coords[0] * height)
                     x2 = int(coords[3] * width)
                     y2 = int(coords[2] * height)
-                else:
-                    x1 = int(coords[1] * scale_1000_x)
-                    y1 = int(coords[0] * scale_1000_y)
-                    x2 = int(coords[3] * scale_1000_x)
-                    y2 = int(coords[2] * scale_1000_y)
+                elif eff == "norm_1000":
+                    x1 = int(coords[1] / 1000 * width)
+                    y1 = int(coords[0] / 1000 * height)
+                    x2 = int(coords[3] / 1000 * width)
+                    y2 = int(coords[2] / 1000 * height)
+                else:  # raw pixel coords
+                    x1 = int(coords[1])
+                    y1 = int(coords[0])
+                    x2 = int(coords[3])
+                    y2 = int(coords[2])
             return x1, y1, x2, y2
 
         def sanitize_box(x1: int, y1: int, x2: int, y2: int):
@@ -755,7 +789,8 @@ class ObjectDetectionPipeline:
         prompt_builder: DetectionPromptBuilder = build_cn_detection_prompt,
         temperature: float = 0.7,
         top_p: float = 0.9,
-        coord_order: str = "yxxy",
+        coord_order: str = "xyxy",
+        coord_norm: str = "auto",
     ):
         self.model_loader = ModelLoader(model_config)
         self.image_loader = ImageLoader()
@@ -766,6 +801,7 @@ class ObjectDetectionPipeline:
             temperature=temperature,
             top_p=top_p,
             coord_order=coord_order,
+            coord_norm=coord_norm,
         )
         self._initialized = False
 
@@ -806,6 +842,15 @@ class ObjectDetectionPipeline:
 
         detections = detection_result.get("detections", [])
         result["raw_response"] = detection_result.get("raw_response", "")
+        print(f"\n[DEBUG] 模型原始响应:\n{result['raw_response']}\n")
+        print(f"[DEBUG] coord_order={self.detector.coord_order}, coord_norm={self.detector.coord_norm}")
+        if detections:
+            raw_coords = []
+            for d in detection_result.get("detections", []):
+                bbox = d.get("bbox", [0, 0, 0, 0])
+                raw_coords.append(f"  像素坐标: [{bbox[0]}, {bbox[1]}, {bbox[2]}, {bbox[3]}]")
+            print("[DEBUG] 解析结果:")
+            print("\n".join(raw_coords))
         result["detections"] = detections
         result["num_detections"] = len(detections)
 
