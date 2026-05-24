@@ -29,11 +29,28 @@ from unsloth_finetune.data.labelme.detection_format import (
 
 
 _FONT_CACHE_DIR = Path.home() / ".cache" / "unsloth_fonts"
-_NOTO_SANS_SC_URL = (
+_NOTO_SANS_SC_URLS = [
+    # Primary: GitHub raw
     "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/SimplifiedChinese/"
-    "NotoSansCJKsc-Regular.otf"
-)
+    "NotoSansCJKsc-Regular.otf",
+    # Mirror: jsDelivr CDN (works in China)
+    "https://cdn.jsdelivr.net/gh/googlefonts/noto-cjk@main/Sans/OTF/SimplifiedChinese/"
+    "NotoSansCJKsc-Regular.otf",
+]
 _NOTO_SANS_SC_FILE = "NotoSansCJKsc-Regular.otf"
+
+
+def _validate_font_file(path: Path) -> bool:
+    """检查字体文件是否为有效的 OTF/TTF/TTC (通过文件头魔术字节)"""
+    if not path.exists() or path.stat().st_size < 100:
+        return False
+    try:
+        with open(path, "rb") as f:
+            header = f.read(4)
+        # OTF(CFF) starts with 'OTTO', TTF starts with 0x00010000, TTC starts with 'ttcf'
+        return header in (b"OTTO", b"\x00\x01\x00\x00", b"ttcf")
+    except Exception:
+        return False
 
 
 def _download_font(url: str, dest: Path, timeout: int = 30) -> bool:
@@ -46,7 +63,7 @@ def _download_font(url: str, dest: Path, timeout: int = 30) -> bool:
         with open(dest, "wb") as f:
             for chunk in resp.iter_content(chunk_size=8192):
                 f.write(chunk)
-        return True
+        return _validate_font_file(dest)
     except Exception:
         return False
 
@@ -66,8 +83,6 @@ def configure_matplotlib_for_chinese(
         "WenQuanYi Micro Hei",
         "Noto Sans CJK SC",
         "Source Han Sans SC",
-        # 下载后的字体名称 (Noto CJK OTF 注册名)
-        "Noto Sans CJK SC",
         "NotoSansCJKsc-Regular",
     ]
     available_fonts = []
@@ -83,39 +98,50 @@ def configure_matplotlib_for_chinese(
     # 系统中未找到中文字体 → 尝试自动下载 Noto Sans CJK SC
     if font_found is None and auto_download:
         cached_font = _FONT_CACHE_DIR / _NOTO_SANS_SC_FILE
-        need_download = not cached_font.exists()
-        if need_download:
+
+        # 检查缓存文件是否损坏; 若损坏则删除以便重新下载
+        if cached_font.exists() and not _validate_font_file(cached_font):
+            if warn:
+                print(f"缓存字体文件损坏 (大小: {cached_font.stat().st_size} bytes), 正在删除并重新下载")
+            cached_font.unlink(missing_ok=True)
+
+        # 缓存无效 → 依次尝试各镜像源下载
+        if not _validate_font_file(cached_font):
             if warn:
                 print("未找到系统中文字体, 正在尝试下载 Noto Sans CJK SC ...")
-            downloaded = _download_font(_NOTO_SANS_SC_URL, cached_font)
-            if downloaded and warn:
-                print(f"字体下载成功: {cached_font}")
-            elif not downloaded and warn:
-                print("字体下载失败, 将回退使用英文字体 (DejaVu Sans)")
+            for url in _NOTO_SANS_SC_URLS:
+                if _download_font(url, cached_font):
+                    if warn:
+                        print(f"字体下载成功: {cached_font}")
+                    break
+                else:
+                    # 下载失败 (网络不可达或文件无效), 清理残留后尝试下一镜像
+                    cached_font.unlink(missing_ok=True)
+            if not _validate_font_file(cached_font) and warn:
+                print("字体下载失败 (所有镜像源均不可达), 将回退使用英文字体 (DejaVu Sans)")
 
-        # 无论刚下载还是已有缓存, 尝试注册
-        if cached_font.exists():
+        # 注册已验证的缓存字体
+        if _validate_font_file(cached_font):
             try:
                 if font_manager is not None:
                     font_manager.fontManager.addfont(str(cached_font))
-                    # 重新扫描以获取新注册的字体名
-                    available_fonts = [
-                        font.name for font in font_manager.fontManager.ttflist
-                    ]
-                    for font_name in chinese_fonts:
-                        if font_name in available_fonts:
-                            font_found = font_name
+                    # 通过文件路径匹配查找实际注册名 (比硬编码名称列表更可靠)
+                    cached_str = str(cached_font)
+                    for entry in font_manager.fontManager.ttflist:
+                        if cached_str in entry.fname:
+                            font_found = entry.name
                             break
-                # 也直接尝试用路径注册
                 if font_found is None:
                     import matplotlib.font_manager as _fm
                     _fm.fontManager.addfont(str(cached_font))
-                    for fn in chinese_fonts:
-                        if fn in [f.name for f in _fm.fontManager.ttflist]:
-                            font_found = fn
+                    cached_str = str(cached_font)
+                    for entry in _fm.fontManager.ttflist:
+                        if cached_str in entry.fname:
+                            font_found = entry.name
                             break
-            except Exception:
-                pass
+            except (OSError, RuntimeError, ValueError) as reg_exc:
+                if warn:
+                    print(f"字体注册异常: {reg_exc}")
 
     if font_found:
         plt_module.rcParams["font.sans-serif"] = [font_found, "DejaVu Sans"]
@@ -126,6 +152,22 @@ def configure_matplotlib_for_chinese(
     if warn:
         print("警告: 未找到中文字体, 图表中文可能显示为方块")
     return None
+
+
+# 中文 → 英文图表标签映射 (用于无中文字体时的回退)
+_CHINESE_ENGLISH_LABEL_MAP = {
+    "标注实例数": "Annotation Instances",
+    "类别标注实例分布（Top 15）": "Category Annotation Distribution (Top 15)",
+    "文件数": "File Count",
+    "类别文件分布（Top 15）": "Category File Distribution (Top 15)",
+}
+
+
+def get_chart_label(chinese_text: str, chinese_font_available: bool) -> str:
+    """有中文字体时返回中文原文, 否则返回英文回退 (未映射则返回原文)"""
+    if chinese_font_available:
+        return chinese_text
+    return _CHINESE_ENGLISH_LABEL_MAP.get(chinese_text, chinese_text)
 
 
 def print_torch_runtime_info(torch_module: Any, version_label: str = "PyTorch 版本") -> None:
