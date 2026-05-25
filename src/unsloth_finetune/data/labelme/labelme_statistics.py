@@ -169,17 +169,19 @@ class LabelMeLabelStatistics:
         else:
             return str(file_path.resolve())
 
-    def _check_imageurl(self, data: Dict) -> bool:
+    def _has_image_reference(self, data: Dict) -> bool:
         """
-        检查是否包含imageUrl字段
+        检查是否包含图片引用字段（imageUrl 或 imagePath）
 
         Args:
             data: JSON解析后的数据
 
         Returns:
-            bool: 是否包含imageUrl
+            bool: 是否包含图片引用
         """
-        return "imageUrl" in data and data["imageUrl"]
+        has_image_url = "imageUrl" in data and data["imageUrl"]
+        has_image_path = "imagePath" in data and data["imagePath"]
+        return has_image_url or has_image_path
 
     def _count_labels_in_file(self, data: Dict) -> Dict[str, int]:
         """
@@ -244,7 +246,7 @@ class LabelMeLabelStatistics:
         Returns:
             Dict: 处理结果
         """
-        result = {"json_path": str(json_path), "success": False, "has_imageurl": False, "label_counts": {}, "error_type": None}
+        result = {"json_path": str(json_path), "success": False, "has_image_ref": False, "label_counts": {}, "error_type": None}
 
         data = parse_json_file(json_path, self.logger)
 
@@ -255,8 +257,8 @@ class LabelMeLabelStatistics:
                 counter["skipped_files"] += 1
             return result
 
-        if not self._check_imageurl(data):
-            result["error_type"] = "no_imageurl"
+        if not self._has_image_reference(data):
+            result["error_type"] = "no_image_ref"
             with counter_lock:
                 counter["skipped_no_imageurl"] += 1
                 counter["skipped_files"] += 1
@@ -274,7 +276,7 @@ class LabelMeLabelStatistics:
         self._update_global_dict(global_dict, label_counts, file_path_str, lock)
 
         result["success"] = True
-        result["has_imageurl"] = True
+        result["has_image_ref"] = True
         result["label_counts"] = label_counts
 
         with counter_lock:
@@ -338,8 +340,8 @@ class LabelMeLabelStatistics:
                         process_result = future.result()
                         if process_result["success"]:
                             self.logger.debug(f"[{completed_count}/{len(json_files)}] 完成: {json_path.name} - {len(process_result['label_counts'])} 个类别")
-                        elif process_result["error_type"] == "no_imageurl":
-                            self.logger.debug(f"[{completed_count}/{len(json_files)}] 跳过(无imageUrl): {json_path.name}")
+                        elif process_result["error_type"] == "no_image_ref":
+                            self.logger.debug(f"[{completed_count}/{len(json_files)}] 跳过(无图片引用): {json_path.name}")
                         elif process_result["error_type"] == "parse_error":
                             self.logger.debug(f"[{completed_count}/{len(json_files)}] 跳过(解析错误): {json_path.name}")
                     except Exception as e:
@@ -350,8 +352,8 @@ class LabelMeLabelStatistics:
 
                 if process_result["success"]:
                     self.logger.debug(f"[{i}/{len(json_files)}] 完成: {json_path.name} - " f"{len(process_result['label_counts'])} 个类别")
-                elif process_result["error_type"] == "no_imageurl":
-                    self.logger.debug(f"[{i}/{len(json_files)}] 跳过(无imageUrl): {json_path.name}")
+                elif process_result["error_type"] == "no_image_ref":
+                    self.logger.debug(f"[{i}/{len(json_files)}] 跳过(无图片引用): {json_path.name}")
                 elif process_result["error_type"] == "parse_error":
                     self.logger.debug(f"[{i}/{len(json_files)}] 跳过(解析错误): {json_path.name}")
 
@@ -374,7 +376,7 @@ class LabelMeLabelStatistics:
         self.logger.info(f"总JSON文件数: {result.total_json_files}")
         self.logger.info(f"有效处理文件: {result.processed_files}")
         self.logger.info(f"跳过文件: {result.skipped_files}")
-        self.logger.info(f"  - 无imageUrl: {result.skipped_no_imageurl}")
+        self.logger.info(f"  - 无图片引用: {result.skipped_no_imageurl}")
         self.logger.info(f"  - 解析错误: {result.skipped_parse_error}")
         self.logger.info(f"类别总数: {result.total_labels}")
         self.logger.info(f"标注实例总数: {result.total_label_instances}")
@@ -464,7 +466,7 @@ def statistics_main():
     print(f"总JSON文件数: {result.total_json_files}")
     print(f"有效处理文件: {result.processed_files}")
     print(f"跳过文件: {result.skipped_files}")
-    print(f"  - 无imageUrl: {result.skipped_no_imageurl}")
+    print(f"  - 无图片引用: {result.skipped_no_imageurl}")
     print(f"  - 解析错误: {result.skipped_parse_error}")
     print(f"类别总数: {result.total_labels}")
     print(f"标注实例总数: {result.total_label_instances}")

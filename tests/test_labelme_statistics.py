@@ -1,4 +1,4 @@
-﻿"""
+"""
 测试 labelme_statistics 模块的核心功能
 覆盖 LabelStatistics, LabelMeLabelStatistics, statistics_labelme_labels
 """
@@ -158,21 +158,29 @@ class TestLabelMeLabelStatisticsInternal:
         result = stats._get_file_path_str(file_path)
         assert str(tmp_path) in result
 
-    def test_check_imageurl_with_url(self, stats_instance):
+    def test_has_image_reference_with_url(self, stats_instance):
         data = {"imageUrl": "https://example.com/image.jpg"}
-        result = stats_instance._check_imageurl(data)
-        # _check_imageurl 返回 truthy 值（URL字符串）
-        assert result  # truthy 检查
+        assert stats_instance._has_image_reference(data)
 
-    def test_check_imageurl_without_url(self, stats_instance):
+    def test_has_image_reference_with_path(self, stats_instance):
         data = {"imagePath": "image.jpg"}
-        assert stats_instance._check_imageurl(data) is False
+        assert stats_instance._has_image_reference(data)
 
-    def test_check_imageurl_empty_url(self, stats_instance):
+    def test_has_image_reference_with_both(self, stats_instance):
+        data = {"imageUrl": "https://example.com/image.jpg", "imagePath": "image.jpg"}
+        assert stats_instance._has_image_reference(data)
+
+    def test_has_image_reference_without_both(self, stats_instance):
+        data = {"otherField": "value"}
+        assert stats_instance._has_image_reference(data) is False
+
+    def test_has_image_reference_empty_url(self, stats_instance):
         data = {"imageUrl": ""}
-        result = stats_instance._check_imageurl(data)
-        # _check_imageurl 对空URL返回 falsy 值（空字符串）
-        assert not result  # falsy 检查
+        assert not stats_instance._has_image_reference(data)
+
+    def test_has_image_reference_empty_path(self, stats_instance):
+        data = {"imagePath": ""}
+        assert not stats_instance._has_image_reference(data)
 
     def test_count_labels_in_file(self, stats_instance):
         data = {
@@ -284,12 +292,12 @@ class TestLabelMeLabelStatisticsFlow:
         assert result.total_json_files == 0
         assert result.processed_files == 0
 
-    def test_statistics_skip_no_imageurl(self, tmp_path):
+    def test_statistics_skip_no_image_ref(self, tmp_path):
         source_dir = tmp_path / "source"
         source_dir.mkdir()
-        json_path = source_dir / "no_url.json"
+        json_path = source_dir / "no_ref.json"
         json_path.write_text(
-            json.dumps({"imagePath": "img.jpg", "shapes": [{"label": "cat"}]}),
+            json.dumps({"shapes": [{"label": "cat"}]}),
             encoding="utf-8",
         )
         stats = LabelMeLabelStatistics(
@@ -300,6 +308,23 @@ class TestLabelMeLabelStatisticsFlow:
         result = stats.statistics()
         assert result.skipped_no_imageurl == 1
         assert result.processed_files == 0
+
+    def test_statistics_imagepath_accepted(self, tmp_path):
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+        json_path = source_dir / "local_ref.json"
+        json_path.write_text(
+            json.dumps({"imagePath": "img.jpg", "shapes": [{"label": "cat"}]}),
+            encoding="utf-8",
+        )
+        stats = LabelMeLabelStatistics(
+            source_dir=str(source_dir),
+            use_tqdm=False,
+            max_workers=1,
+        )
+        result = stats.statistics()
+        assert result.skipped_no_imageurl == 0
+        assert result.processed_files == 1
 
     def test_statistics_skip_parse_error(self, tmp_path):
         source_dir = tmp_path / "source"
