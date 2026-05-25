@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 # Unsloth 必须在所有其他导入之前导入以确保优化生效
-import unsloth  # noqa: F401
+import unsloth  # noqa: F401  # isort: skip
 
 import gc
 import json
@@ -11,14 +11,11 @@ import re
 import traceback
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import requests
 import torch
 from PIL import Image, ImageDraw, ImageFont
-
-from unsloth_finetune.training.distributed.adapter_utils import prepared_adapter_dir
-
 
 from unsloth_finetune.data.labelme.detection_format import (
     DetectionPromptBuilder,
@@ -26,46 +23,7 @@ from unsloth_finetune.data.labelme.detection_format import (
     build_en_normalized_detection_prompt,
     convert_xyxy_to_format,
 )
-
-
-_FONT_CACHE_DIR = Path.home() / ".cache" / "unsloth_fonts"
-_NOTO_SANS_SC_URLS = [
-    # Primary: GitHub raw
-    "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/SimplifiedChinese/"
-    "NotoSansCJKsc-Regular.otf",
-    # Mirror: jsDelivr CDN (works in China)
-    "https://cdn.jsdelivr.net/gh/googlefonts/noto-cjk@main/Sans/OTF/SimplifiedChinese/"
-    "NotoSansCJKsc-Regular.otf",
-]
-_NOTO_SANS_SC_FILE = "NotoSansCJKsc-Regular.otf"
-
-
-def _validate_font_file(path: Path) -> bool:
-    """检查字体文件是否为有效的 OTF/TTF/TTC (通过文件头魔术字节)"""
-    if not path.exists() or path.stat().st_size < 100:
-        return False
-    try:
-        with open(path, "rb") as f:
-            header = f.read(4)
-        # OTF(CFF) starts with 'OTTO', TTF starts with 0x00010000, TTC starts with 'ttcf'
-        return header in (b"OTTO", b"\x00\x01\x00\x00", b"ttcf")
-    except Exception:
-        return False
-
-
-def _download_font(url: str, dest: Path, timeout: int = 30) -> bool:
-    """下载字体文件到本地缓存目录, 返回是否成功"""
-    try:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        resp = requests.get(url, timeout=timeout, stream=True)
-        if resp.status_code != 200:
-            return False
-        with open(dest, "wb") as f:
-            for chunk in resp.iter_content(chunk_size=8192):
-                f.write(chunk)
-        return _validate_font_file(dest)
-    except Exception:
-        return False
+from unsloth_finetune.training.distributed.adapter_utils import prepared_adapter_dir
 
 
 def configure_matplotlib_for_chinese(
@@ -74,79 +32,14 @@ def configure_matplotlib_for_chinese(
     warn: bool = False,
     auto_download: bool = True,
 ) -> Optional[str]:
-    chinese_fonts = [
-        "SimHei",
-        "Microsoft YaHei",
-        "PingFang SC",
-        "Heiti SC",
-        "STHeiti",
-        "WenQuanYi Micro Hei",
-        "Noto Sans CJK SC",
-        "Source Han Sans SC",
-        "NotoSansCJKsc-Regular",
-    ]
-    available_fonts = []
-    if font_manager is not None:
-        available_fonts = [font.name for font in font_manager.fontManager.ttflist]
+    from unsloth_finetune.tools.font_utils import get_chinese_font
 
-    font_found = None
-    for font_name in chinese_fonts:
-        if font_name in available_fonts:
-            font_found = font_name
-            break
+    font_name = get_chinese_font(auto_install=True, auto_download=auto_download)
 
-    # 系统中未找到中文字体 → 尝试自动下载 Noto Sans CJK SC
-    if font_found is None and auto_download:
-        cached_font = _FONT_CACHE_DIR / _NOTO_SANS_SC_FILE
-
-        # 检查缓存文件是否损坏; 若损坏则删除以便重新下载
-        if cached_font.exists() and not _validate_font_file(cached_font):
-            if warn:
-                print(f"缓存字体文件损坏 (大小: {cached_font.stat().st_size} bytes), 正在删除并重新下载")
-            cached_font.unlink(missing_ok=True)
-
-        # 缓存无效 → 依次尝试各镜像源下载
-        if not _validate_font_file(cached_font):
-            if warn:
-                print("未找到系统中文字体, 正在尝试下载 Noto Sans CJK SC ...")
-            for url in _NOTO_SANS_SC_URLS:
-                if _download_font(url, cached_font):
-                    if warn:
-                        print(f"字体下载成功: {cached_font}")
-                    break
-                else:
-                    # 下载失败 (网络不可达或文件无效), 清理残留后尝试下一镜像
-                    cached_font.unlink(missing_ok=True)
-            if not _validate_font_file(cached_font) and warn:
-                print("字体下载失败 (所有镜像源均不可达), 将回退使用英文字体 (DejaVu Sans)")
-
-        # 注册已验证的缓存字体
-        if _validate_font_file(cached_font):
-            try:
-                if font_manager is not None:
-                    font_manager.fontManager.addfont(str(cached_font))
-                    # 通过文件路径匹配查找实际注册名 (比硬编码名称列表更可靠)
-                    cached_str = str(cached_font)
-                    for entry in font_manager.fontManager.ttflist:
-                        if cached_str in entry.fname:
-                            font_found = entry.name
-                            break
-                if font_found is None:
-                    import matplotlib.font_manager as _fm
-                    _fm.fontManager.addfont(str(cached_font))
-                    cached_str = str(cached_font)
-                    for entry in _fm.fontManager.ttflist:
-                        if cached_str in entry.fname:
-                            font_found = entry.name
-                            break
-            except (OSError, RuntimeError, ValueError) as reg_exc:
-                if warn:
-                    print(f"字体注册异常: {reg_exc}")
-
-    if font_found:
-        plt_module.rcParams["font.sans-serif"] = [font_found, "DejaVu Sans"]
+    if font_name:
+        plt_module.rcParams["font.sans-serif"] = [font_name, "DejaVu Sans"]
         plt_module.rcParams["axes.unicode_minus"] = False
-        return font_found
+        return font_name
 
     plt_module.rcParams["font.sans-serif"] = ["DejaVu Sans"]
     if warn:
@@ -720,8 +613,10 @@ class DetectionVisualizer:
                         pass
 
         # 系统字体均不可用 → 尝试使用下载缓存的 Noto Sans CJK SC
-        cached_font = _FONT_CACHE_DIR / _NOTO_SANS_SC_FILE
-        if cached_font.exists():
+        from unsloth_finetune.tools.font_utils import get_cached_font_path
+
+        cached_font = get_cached_font_path()
+        if cached_font is not None:
             try:
                 return ImageFont.truetype(str(cached_font), self.font_size)
             except Exception:
