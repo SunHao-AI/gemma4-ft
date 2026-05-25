@@ -268,6 +268,7 @@ class ObjectDetector:
         top_p: float = 0.9,
         coord_format: str = "xyxy",
         coord_norm: str = "auto",
+        model_coord_order: str = "xyxy",
     ):
         self.model_loader = model_loader
         self.prompt_builder = prompt_builder
@@ -275,6 +276,7 @@ class ObjectDetector:
         self.top_p = float(top_p)
         self.coord_format = coord_format
         self.coord_norm = coord_norm
+        self.model_coord_order = model_coord_order
 
     def _resolve_model_device(self, model) -> torch.device:
         model_device = getattr(model, "device", None)
@@ -366,6 +368,7 @@ class ObjectDetector:
                 response, width, height,
                 coord_format=self.coord_format,
                 coord_norm=self.coord_norm,
+                model_coord_order=self.model_coord_order,
             )
             return {
                 "success": True,
@@ -416,6 +419,7 @@ class ObjectDetector:
                         response, width, height,
                         coord_format=self.coord_format,
                         coord_norm=self.coord_norm,
+                        model_coord_order=self.model_coord_order,
                     )
                     results.append(
                         {
@@ -440,38 +444,52 @@ class ObjectDetector:
         height: int,
         coord_format: str = "xyxy",
         coord_norm: str = "auto",
+        model_coord_order: str = "xyxy",
     ) -> List[Dict[str, Any]]:
         detections: List[Dict[str, Any]] = []
 
+        def _to_xyxy(coords: list) -> list:
+            """Convert model output coordinate order to [x_min, y_min, x_max, y_max].
+            Gemma/PaliGemma models output [y_min, x_min, y_max, x_max] (yxyx)."""
+            if model_coord_order == "yxyx":
+                return [coords[1], coords[0], coords[3], coords[2]]
+            return list(coords)
+
         def _is_normalized(coords: list) -> bool:
             return all(0 <= v <= 1 for v in coords)
-
-        def _is_1000_based(coords: list) -> bool:
-            return all(0 <= v <= 1000 for v in coords) and not _is_normalized(coords)
 
         def _effective_norm(coords: list) -> str:
             if coord_norm != "auto":
                 return coord_norm
             if _is_normalized(coords):
                 return "norm_1"
-            if _is_1000_based(coords):
+            # Check norm_1000 before raw: Gemma/PaliGemma models natively
+            # output 0-1000 coordinates, and for large images (>1000px)
+            # these values also satisfy raw-pixel bounds, causing misdetection.
+            if all(0 <= v <= 1000 for v in coords):
                 return "norm_1000"
+            xy = _to_xyxy(coords)
+            max_x = max(xy[0], xy[2])
+            max_y = max(xy[1], xy[3])
+            if max_x <= width and max_y <= height:
+                return "raw"
             return "raw"
 
         def convert_coords(coords: list) -> Tuple[int, int, int, int]:
+            xy = _to_xyxy(coords)
             eff = _effective_norm(coords)
             if eff == "norm_1":
-                x1 = int(coords[0] * width)
-                y1 = int(coords[1] * height)
-                x2 = int(coords[2] * width)
-                y2 = int(coords[3] * height)
+                x1 = int(xy[0] * width)
+                y1 = int(xy[1] * height)
+                x2 = int(xy[2] * width)
+                y2 = int(xy[3] * height)
             elif eff == "norm_1000":
-                x1 = int(coords[0] / 1000 * width)
-                y1 = int(coords[1] / 1000 * height)
-                x2 = int(coords[2] / 1000 * width)
-                y2 = int(coords[3] / 1000 * height)
+                x1 = int(xy[0] / 1000 * width)
+                y1 = int(xy[1] / 1000 * height)
+                x2 = int(xy[2] / 1000 * width)
+                y2 = int(xy[3] / 1000 * height)
             else:  # raw pixel coords
-                x1, y1, x2, y2 = int(coords[0]), int(coords[1]), int(coords[2]), int(coords[3])
+                x1, y1, x2, y2 = int(xy[0]), int(xy[1]), int(xy[2]), int(xy[3])
             return x1, y1, x2, y2
 
         def sanitize_box(x1: int, y1: int, x2: int, y2: int):
@@ -756,6 +774,7 @@ class ObjectDetectionPipeline:
         top_p: float = 0.9,
         coord_format: str = "xyxy",
         coord_norm: str = "auto",
+        model_coord_order: str = "xyxy",
     ):
         self.model_loader = ModelLoader(model_config)
         self.image_loader = ImageLoader()
@@ -767,6 +786,7 @@ class ObjectDetectionPipeline:
             top_p=top_p,
             coord_format=coord_format,
             coord_norm=coord_norm,
+            model_coord_order=model_coord_order,
         )
         self._initialized = False
 
@@ -808,7 +828,7 @@ class ObjectDetectionPipeline:
         detections = detection_result.get("detections", [])
         result["raw_response"] = detection_result.get("raw_response", "")
         print(f"\n[DEBUG] 模型原始响应:\n{result['raw_response']}\n")
-        print(f"[DEBUG] coord_format={self.detector.coord_format}, coord_norm={self.detector.coord_norm}")
+        print(f"[DEBUG] coord_format={self.detector.coord_format}, coord_norm={self.detector.coord_norm}, model_coord_order={self.detector.model_coord_order}")
         if detections:
             raw_coords = []
             for d in detection_result.get("detections", []):
