@@ -38,8 +38,8 @@ from unsloth_finetune.training.distributed.load_balancer import (
 from unsloth_finetune.training.distributed.adapter_utils import prepared_adapter_dir
 from unsloth_finetune.data.labelme.detection_format import (
     DetectionPromptBuilder,
-    build_cn_normalized_detection_prompt,
-    build_en_normalized_detection_prompt,
+    build_cn_detection_prompt,
+    build_en_detection_prompt,
     convert_xyxy_to_format,
 )
 
@@ -589,24 +589,24 @@ class ObjectDetector:
         self.coord_format = coord_format
 
     def _build_prompt(self, query: str) -> str:
-        query_text = str(query or "").strip()
+        query_text = str(query or “”).strip()
         if not query_text:
             return query_text
 
         # 训练数据里的 query 已经是完整自然语言指令时，评估直接复用，
-        # 避免再套一层模板造成“请分析这张图像，请分析这张图片...”的口径漂移。
+        # 避免再套一层模板造成口径漂移。
         if (
-            "识别并定位其中的" in query_text
-            or query_text.startswith("请分析这张图像")
-            or query_text.startswith("请分析这张图片")
-            or query_text.startswith("Analyze this image carefully")
-            or "\"box_2d\"" in query_text
+            “识别并定位其中的” in query_text
+            or query_text.startswith(“请检测图片中”)
+            or query_text.startswith(“请检测图片”)
+            or query_text.startswith(“Please detect”)
+            or query_text.startswith(“Detect”)
         ):
             return query_text
 
         if self.prompt_builder:
             return self.prompt_builder(query_text)
-        return build_en_normalized_detection_prompt(query_text)
+        return build_en_detection_prompt(query_text)
     def _resolve_model_device(self, model) -> torch.device:
         model_device = getattr(model, "device", None)
         if model_device is not None:
@@ -1583,8 +1583,8 @@ def main():
     INFERENCE_TOP_P = args.top_p
     INFERENCE_MAX_NEW_TOKENS = args.max_new_tokens
 
-    # Resolve prompt builder (always normalized xyxy) and coord format
-    prompt_builder = build_cn_normalized_detection_prompt
+    # Resolve prompt builder (matches training prompt format) and coord format
+    prompt_builder = build_cn_detection_prompt
     coord_format = args.coord_format
 
     rank = None

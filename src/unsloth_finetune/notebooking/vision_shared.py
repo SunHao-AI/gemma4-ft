@@ -19,8 +19,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 from unsloth_finetune.data.labelme.detection_format import (
     DetectionPromptBuilder,
-    build_cn_normalized_detection_prompt,
-    build_en_normalized_detection_prompt,
+    build_cn_detection_prompt,
+    build_en_detection_prompt,
     convert_xyxy_to_format,
 )
 from unsloth_finetune.training.distributed.adapter_utils import prepared_adapter_dir
@@ -263,7 +263,7 @@ class ObjectDetector:
     def __init__(
         self,
         model_loader: ModelLoader,
-        prompt_builder: DetectionPromptBuilder = build_en_normalized_detection_prompt,
+        prompt_builder: DetectionPromptBuilder = build_en_detection_prompt,
         temperature: float = 0.7,
         top_p: float = 0.9,
         coord_format: str = "xyxy",
@@ -752,7 +752,7 @@ class ObjectDetectionPipeline:
     def __init__(
         self,
         model_config: Dict[str, Any],
-        prompt_builder: DetectionPromptBuilder = build_cn_normalized_detection_prompt,
+        prompt_builder: DetectionPromptBuilder = build_cn_detection_prompt,
         temperature: float = 0.7,
         top_p: float = 0.9,
         coord_format: str = "xyxy",

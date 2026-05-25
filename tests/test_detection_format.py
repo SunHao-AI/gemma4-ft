@@ -10,8 +10,8 @@ from unsloth_finetune.data.labelme.detection_format import (
     OutputFormat,
     FORMAT_SPECS,
     build_box_2d_json_response,
-    build_cn_normalized_detection_prompt,
-    build_en_normalized_detection_prompt,
+    build_cn_detection_prompt,
+    build_en_detection_prompt,
     parse_box_2d_json_ground_truth,
     convert_xyxy_to_format,
     _extract_json_array,
@@ -85,10 +85,8 @@ class TestDetectionFormatSpec:
 
     def test_detection_prompt_builder_type_alias(self):
         """DetectionPromptBuilder should be a callable type alias."""
-        # It's a type alias; just verify it's callable-compatible at the type level
-        # by checking that functions with (str)->str signature are compatible.
-        assert callable(build_cn_normalized_detection_prompt)
-        assert callable(build_en_normalized_detection_prompt)
+        assert callable(build_cn_detection_prompt)
+        assert callable(build_en_detection_prompt)
 
 
 # ---------------------------------------------------------------------------

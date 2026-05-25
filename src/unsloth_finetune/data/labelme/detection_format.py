@@ -414,46 +414,22 @@ def build_box_2d_json_response(bboxes: List[Dict[str, float]]) -> str:
     return json.dumps(detections, ensure_ascii=False)
 
 
-def build_cn_normalized_detection_prompt(query: str) -> str:
-    """Build Chinese normalized xyxy detection prompt.
+def build_cn_detection_prompt(query: str) -> str:
+    """Build Chinese detection prompt matching training format (descriptive style).
 
-    Coordinates: [x_min, y_min, x_max, y_max] normalized 0-1.
-    Kept for backward compatibility with inference code.
+    Simple format without coordinate normalization or JSON schema instructions.
+    The model recalls output format from training data.
     """
-    return (
-        f"请仔细分析这张图片，{query}。\n"
-        "\n"
-        "如果检测到目标，请严格按照以下JSON格式返回检测结果:\n"
-        '[\n  {"box_2d": [x_min, y_min, x_max, y_max], "label": "目标类别", "confidence": 1.0}\n]\n'
-        "\n"
-        "坐标说明:\n"
-        "- box_2d: 归一化坐标 [x_min, y_min, x_max, y_max]，取值范围 [0, 1]\n"
-        "- x_min < x_max, y_min < y_max\n"
-        "- confidence: 置信度分数 (0.0-1.0)\n"
-        "\n"
-        "如果未检测到目标，请返回空数组: []"
-    )
+    return f"请检测图片中的{query.strip()}, 并返回边界框坐标。"
 
 
-def build_en_normalized_detection_prompt(query: str) -> str:
-    """Build English normalized xyxy detection prompt.
+def build_en_detection_prompt(query: str) -> str:
+    """Build English detection prompt matching training format (descriptive style).
 
-    Coordinates: [x_min, y_min, x_max, y_max] normalized 0-1.
-    Kept for backward compatibility with inference code.
+    Simple format without coordinate normalization or JSON schema instructions.
+    The model recalls output format from training data.
     """
-    return (
-        f"Analyze this image carefully. {query}\n"
-        "\n"
-        "If the target is present, return only a JSON array with this schema:\n"
-        '[\n  {"box_2d": [x_min, y_min, x_max, y_max], "label": "target", "confidence": 1.0}\n]\n'
-        "\n"
-        "Coordinate rules:\n"
-        "- box_2d uses normalized [x_min, y_min, x_max, y_max] coordinates (0-1 range)\n"
-        "- x_min < x_max, y_min < y_max\n"
-        "- confidence must be between 0.0 and 1.0\n"
-        "\n"
-        "If no target is found, return []"
-    )
+    return f"Please detect all [{query.strip()}] in the image and return their bounding boxes."
 
 
 def _extract_json_array(text: str) -> Optional[str]:
