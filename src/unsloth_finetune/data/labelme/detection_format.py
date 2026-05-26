@@ -42,6 +42,7 @@ class CoordNorm(str, Enum):
 class CoordFormat(str, Enum):
     """Coordinate output format modes."""
     XYXY = "xyxy"
+    YXYX = "yxyx"
     XYWH = "xywh"
     CXCYWH = "cxcywh"
 
