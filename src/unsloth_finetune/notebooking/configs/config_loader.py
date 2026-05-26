@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 try:
     import yaml
+
     YAML_AVAILABLE = True
 except ImportError:
     YAML_AVAILABLE = False
@@ -35,6 +36,7 @@ class ConfigValidationError(Exception):
 @dataclass
 class ModelConfig:
     """模型配置数据类"""
+
     name: str = ""
     family: str = ""
     version: str = ""
@@ -45,6 +47,7 @@ class ModelConfig:
 @dataclass
 class DataPreparationConfig:
     """数据准备配置"""
+
     coord_norm: str = "norm_1000"
     coord_format: str = "xyxy"
     output_format: str = "box_2d_json"
@@ -64,6 +67,7 @@ class DataPreparationConfig:
 @dataclass
 class ModelLoadingConfig:
     """模型加载配置"""
+
     max_seq_length: int = 2048
     load_in_4bit: bool = True
     load_in_8bit: bool = False
@@ -75,6 +79,7 @@ class ModelLoadingConfig:
 @dataclass
 class LoRAConfig:
     """LoRA配置"""
+
     r: int = 16
     alpha: int = 16
     dropout: float = 0.0
@@ -86,6 +91,7 @@ class LoRAConfig:
 @dataclass
 class TrainingConfig:
     """训练配置"""
+
     num_epochs: int = 1
     per_device_batch_size: int = 8
     gradient_accumulation_steps: int = 2
@@ -107,6 +113,7 @@ class TrainingConfig:
 @dataclass
 class DistributedConfig:
     """分布式训练配置"""
+
     mode: str = "ddp"
     num_gpus: int = 8
     ddp_backend: str = "nccl"
@@ -120,6 +127,7 @@ class DistributedConfig:
 @dataclass
 class DataLoaderConfig:
     """数据加载配置"""
+
     num_workers: int = 4
     prefetch_factor: int = 4
     pin_memory: bool = True
@@ -130,6 +138,7 @@ class DataLoaderConfig:
 @dataclass
 class OutputConfig:
     """输出配置"""
+
     base_dir: str = "models/finetuned"
     save_strategy: str = "steps"
     save_steps: int = 500
@@ -142,6 +151,7 @@ class OutputConfig:
 @dataclass
 class EvaluationConfig:
     """评估配置"""
+
     eval_strategy: str = "steps"
     eval_steps: int = 100
     eval_on_start: bool = False
@@ -153,6 +163,7 @@ class EvaluationConfig:
 @dataclass
 class InferenceConfig:
     """推理配置"""
+
     max_new_tokens: int = 128
     temperature: float = 0.1
     top_p: float = 0.9
@@ -205,10 +216,7 @@ class TrainingConfigLoader:
     @classmethod
     def check_yaml_available(cls) -> bool:
         if not YAML_AVAILABLE:
-            raise ImportError(
-                "PyYAML 未安装。请执行: pip install pyyaml\n"
-                "或者使用 JSON 格式配置文件。"
-            )
+            raise ImportError("PyYAML 未安装。请执行: pip install pyyaml\n" "或者使用 JSON 格式配置文件。")
         return True
 
     @classmethod
@@ -224,10 +232,7 @@ class TrainingConfigLoader:
         path = cls.CONFIG_DIR / config_file
         if not path.exists():
             available = cls.get_available_configs()
-            raise FileNotFoundError(
-                f"配置文件不存在: {config_file}\n"
-                f"可用配置: {available}"
-            )
+            raise FileNotFoundError(f"配置文件不存在: {config_file}\n" f"可用配置: {available}")
         return path
 
     def load(self, config_path: Union[str, Path]) -> "TrainingConfigLoader":
@@ -333,21 +338,21 @@ class TrainingConfigLoader:
         vision_cfg = cfg.get("vision", {})
 
         self.training = TrainingConfig(
-            num_epochs=cfg.get("num_epochs", 1),
-            per_device_batch_size=cfg.get("per_device_batch_size", 8),
-            gradient_accumulation_steps=cfg.get("gradient_accumulation_steps", 2),
-            learning_rate=cfg.get("learning_rate", 2e-5),
+            num_epochs=int(cfg.get("num_epochs", 1)),
+            per_device_batch_size=int(cfg.get("per_device_batch_size", 8)),
+            gradient_accumulation_steps=int(cfg.get("gradient_accumulation_steps", 2)),
+            learning_rate=float(cfg.get("learning_rate", 2e-5)),
             lr_scaling=cfg.get("lr_scaling", "sqrt"),
-            warmup_ratio=cfg.get("warmup_ratio", 0.1),
+            warmup_ratio=float(cfg.get("warmup_ratio", 0.1)),
             optimizer_type=opt_cfg.get("type", "adamw_8bit"),
-            weight_decay=opt_cfg.get("weight_decay", 0.01),
-            max_grad_norm=opt_cfg.get("max_grad_norm", 1.0),
-            bf16=prec_cfg.get("bf16", True),
-            fp16=prec_cfg.get("fp16", False),
-            tf32=prec_cfg.get("tf32", True),
-            vision_enabled=vision_cfg.get("enabled", True),
-            image_width=vision_cfg.get("image_width", 896),
-            image_height=vision_cfg.get("image_height", 896),
+            weight_decay=float(opt_cfg.get("weight_decay", 0.01)),
+            max_grad_norm=float(opt_cfg.get("max_grad_norm", 1.0)),
+            bf16=bool(prec_cfg.get("bf16", True)),
+            fp16=bool(prec_cfg.get("fp16", False)),
+            tf32=bool(prec_cfg.get("tf32", True)),
+            vision_enabled=bool(vision_cfg.get("enabled", True)),
+            image_width=int(vision_cfg.get("image_width", 896)),
+            image_height=int(vision_cfg.get("image_height", 896)),
             image_load_mode=vision_cfg.get("image_load_mode", "lazy"),
         )
 
@@ -398,22 +403,22 @@ class TrainingConfigLoader:
 
         self.evaluation = EvaluationConfig(
             eval_strategy=cfg.get("eval_strategy", "steps"),
-            eval_steps=cfg.get("eval_steps", 100),
-            eval_on_start=cfg.get("eval_on_start", False),
+            eval_steps=int(cfg.get("eval_steps", 100)),
+            eval_on_start=bool(cfg.get("eval_on_start", False)),
             metrics=cfg.get("metrics", ["loss"]),
-            post_train_eval_auto_run=post_eval_cfg.get("auto_run", False),
-            post_train_eval_raise_on_error=post_eval_cfg.get("raise_on_error", False),
+            post_train_eval_auto_run=bool(post_eval_cfg.get("auto_run", False)),
+            post_train_eval_raise_on_error=bool(post_eval_cfg.get("raise_on_error", False)),
         )
 
     def _parse_inference_config(self) -> None:
         cfg = self._raw_config.get("inference", {})
 
         self.inference = InferenceConfig(
-            max_new_tokens=cfg.get("max_new_tokens", 128),
-            temperature=cfg.get("temperature", 0.1),
-            top_p=cfg.get("top_p", 0.9),
-            top_k=cfg.get("top_k", 50),
-            do_sample=cfg.get("do_sample", True),
+            max_new_tokens=int(cfg.get("max_new_tokens", 128)),
+            temperature=float(cfg.get("temperature", 0.1)),
+            top_p=float(cfg.get("top_p", 0.9)),
+            top_k=int(cfg.get("top_k", 50)),
+            do_sample=bool(cfg.get("do_sample", True)),
         )
 
     def validate(self, strict: bool = True) -> Tuple[bool, List[str]]:
@@ -437,134 +442,86 @@ class TrainingConfigLoader:
         dp = self.data_preparation
 
         if dp.coord_norm not in VALID_COORD_NORMS:
-            self._validation_errors.append(
-                f"无效的 coord_norm: '{dp.coord_norm}'，可选值: {VALID_COORD_NORMS}"
-            )
+            self._validation_errors.append(f"无效的 coord_norm: '{dp.coord_norm}'，可选值: {VALID_COORD_NORMS}")
 
         if dp.coord_format not in VALID_COORD_FORMATS:
-            self._validation_errors.append(
-                f"无效的 coord_format: '{dp.coord_format}'，可选值: {VALID_COORD_FORMATS}"
-            )
+            self._validation_errors.append(f"无效的 coord_format: '{dp.coord_format}'，可选值: {VALID_COORD_FORMATS}")
 
         if dp.output_format not in VALID_OUTPUT_FORMATS:
-            self._validation_errors.append(
-                f"无效的 output_format: '{dp.output_format}'，可选值: {VALID_OUTPUT_FORMATS}"
-            )
+            self._validation_errors.append(f"无效的 output_format: '{dp.output_format}'，可选值: {VALID_OUTPUT_FORMATS}")
 
         if dp.prompt_lang not in VALID_PROMPT_LANGS:
-            self._validation_errors.append(
-                f"无效的 prompt_lang: '{dp.prompt_lang}'，可选值: {VALID_PROMPT_LANGS}"
-            )
+            self._validation_errors.append(f"无效的 prompt_lang: '{dp.prompt_lang}'，可选值: {VALID_PROMPT_LANGS}")
 
         if dp.prompt_style not in VALID_PROMPT_STYLES:
-            self._validation_errors.append(
-                f"无效的 prompt_style: '{dp.prompt_style}'，可选值: {VALID_PROMPT_STYLES}"
-            )
+            self._validation_errors.append(f"无效的 prompt_style: '{dp.prompt_style}'，可选值: {VALID_PROMPT_STYLES}")
 
         if dp.split_method not in VALID_SPLIT_METHODS:
-            self._validation_errors.append(
-                f"无效的 split_method: '{dp.split_method}'，可选值: {VALID_SPLIT_METHODS}"
-            )
+            self._validation_errors.append(f"无效的 split_method: '{dp.split_method}'，可选值: {VALID_SPLIT_METHODS}")
 
         parts = dp.split_ratio.split(":")
         if len(parts) != 3 or not all(p.isdigit() for p in parts):
-            self._validation_errors.append(
-                f"无效的 split_ratio 格式: '{dp.split_ratio}'，应为 'N:M:K' 格式"
-            )
+            self._validation_errors.append(f"无效的 split_ratio 格式: '{dp.split_ratio}'，应为 'N:M:K' 格式")
 
     def _validate_model_loading(self) -> None:
         ml = self.model_loading
 
         if ml.max_seq_length <= 0:
-            self._validation_errors.append(
-                f"max_seq_length 必须为正数: {ml.max_seq_length}"
-            )
+            self._validation_errors.append(f"max_seq_length 必须为正数: {ml.max_seq_length}")
 
         if ml.attention_implementation not in VALID_ATTENTION_IMPLS:
-            self._validation_errors.append(
-                f"无效的 attention_implementation: '{ml.attention_implementation}'，"
-                f"可选值: {VALID_ATTENTION_IMPLS}"
-            )
+            self._validation_errors.append(f"无效的 attention_implementation: '{ml.attention_implementation}'，" f"可选值: {VALID_ATTENTION_IMPLS}")
 
         if ml.load_in_4bit and ml.load_in_8bit:
-            self._validation_errors.append(
-                "不能同时启用 load_in_4bit 和 load_in_8bit"
-            )
+            self._validation_errors.append("不能同时启用 load_in_4bit 和 load_in_8bit")
 
     def _validate_lora(self) -> None:
         lora = self.lora
 
         if lora.r <= 0 or lora.r > 256:
-            self._validation_errors.append(
-                f"LoRA r 应在 1-256 范围内: {lora.r}"
-            )
+            self._validation_errors.append(f"LoRA r 应在 1-256 范围内: {lora.r}")
 
         if lora.alpha <= 0:
-            self._validation_errors.append(
-                f"LoRA alpha 必须为正数: {lora.alpha}"
-            )
+            self._validation_errors.append(f"LoRA alpha 必须为正数: {lora.alpha}")
 
         if not 0 <= lora.dropout <= 1:
-            self._validation_errors.append(
-                f"LoRA dropout 应在 [0, 1] 范围内: {lora.dropout}"
-            )
+            self._validation_errors.append(f"LoRA dropout 应在 [0, 1] 范围内: {lora.dropout}")
 
         if not lora.target_modules:
-            self._validation_errors.append(
-                "LoRA target_modules 不能为空"
-            )
+            self._validation_errors.append("LoRA target_modules 不能为空")
 
     def _validate_training(self) -> None:
         tr = self.training
 
         if tr.num_epochs <= 0:
-            self._validation_errors.append(
-                f"num_epochs 必须为正数: {tr.num_epochs}"
-            )
+            self._validation_errors.append(f"num_epochs 必须为正数: {tr.num_epochs}")
 
         if tr.per_device_batch_size <= 0:
-            self._validation_errors.append(
-                f"per_device_batch_size 必须为正数: {tr.per_device_batch_size}"
-            )
+            self._validation_errors.append(f"per_device_batch_size 必须为正数: {tr.per_device_batch_size}")
 
         if tr.gradient_accumulation_steps <= 0:
-            self._validation_errors.append(
-                f"gradient_accumulation_steps 必须为正数: {tr.gradient_accumulation_steps}"
-            )
+            self._validation_errors.append(f"gradient_accumulation_steps 必须为正数: {tr.gradient_accumulation_steps}")
 
         if tr.learning_rate <= 0 or tr.learning_rate > 1e-2:
-            self._validation_errors.append(
-                f"learning_rate 应在 [1e-8, 1e-2] 范围内: {tr.learning_rate}"
-            )
+            self._validation_errors.append(f"learning_rate 应在 [1e-8, 1e-2] 范围内: {tr.learning_rate}")
 
         if tr.lr_scaling not in VALID_LR_SCALINGS:
-            self._validation_errors.append(
-                f"无效的 lr_scaling: '{tr.lr_scaling}'，可选值: {VALID_LR_SCALINGS}"
-            )
+            self._validation_errors.append(f"无效的 lr_scaling: '{tr.lr_scaling}'，可选值: {VALID_LR_SCALINGS}")
 
         if not 0 <= tr.warmup_ratio <= 1:
-            self._validation_errors.append(
-                f"warmup_ratio 应在 [0, 1] 范围内: {tr.warmup_ratio}"
-            )
+            self._validation_errors.append(f"warmup_ratio 应在 [0, 1] 范围内: {tr.warmup_ratio}")
 
         if tr.image_load_mode not in VALID_IMAGE_LOAD_MODES:
-            self._validation_errors.append(
-                f"无效的 image_load_mode: '{tr.image_load_mode}'，"
-                f"可选值: {VALID_IMAGE_LOAD_MODES}"
-            )
+            self._validation_errors.append(f"无效的 image_load_mode: '{tr.image_load_mode}'，" f"可选值: {VALID_IMAGE_LOAD_MODES}")
 
     def _validate_distributed(self) -> None:
         dist = self.distributed
 
         if dist.mode not in VALID_DISTRIBUTED_MODES:
-            self._validation_errors.append(
-                f"无效的 distributed mode: '{dist.mode}'，可选值: {VALID_DISTRIBUTED_MODES}"
-            )
+            self._validation_errors.append(f"无效的 distributed mode: '{dist.mode}'，可选值: {VALID_DISTRIBUTED_MODES}")
 
         if dist.num_gpus <= 0:
-            self._validation_errors.append(
-                f"num_gpus 必须为正数: {dist.num_gpus}"
-            )
+            self._validation_errors.append(f"num_gpus 必须为正数: {dist.num_gpus}")
 
     def _validate_gemma4_specific(self) -> None:
         if self.model.family.lower() != "gemma":
@@ -573,16 +530,10 @@ class TrainingConfigLoader:
         dp = self.data_preparation
 
         if dp.coord_norm != GEMMA4_REQUIRED_CONFIG["coord_norm"]:
-            self._validation_errors.append(
-                f"Gemma4 模型要求 coord_norm='norm_1000'，"
-                f"当前设置为 '{dp.coord_norm}'"
-            )
+            self._validation_errors.append(f"Gemma4 模型要求 coord_norm='norm_1000'，" f"当前设置为 '{dp.coord_norm}'")
 
         if dp.coord_format != GEMMA4_REQUIRED_CONFIG["coord_format"]:
-            self._validation_errors.append(
-                f"Gemma4 模型要求 coord_format='yxyx'（box_2d为[y1,x1,y2,x2]），"
-                f"当前设置为 '{dp.coord_format}'"
-            )
+            self._validation_errors.append(f"Gemma4 模型要求 coord_format='yxyx'（box_2d为[y1,x1,y2,x2]），" f"当前设置为 '{dp.coord_format}'")
 
     def update(self, updates: Dict[str, Any]) -> "TrainingConfigLoader":
         for key, value in updates.items():
