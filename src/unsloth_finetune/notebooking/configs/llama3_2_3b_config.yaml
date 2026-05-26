@@ -1,0 +1,157 @@
+# ============================================================================
+# Llama3.2 3B 模型专用配置
+# ============================================================================
+# 针对 Meta Llama3.2 3B 视觉语言模型的微调配置
+#
+# 重要说明:
+# 1. Llama3.2-Vision 支持视觉输入，推荐使用 xyxy 格式
+# 2. 坐标归一化推荐使用 norm_1（标准归一化）
+# 3. 本配置针对目标检测任务优化
+# ============================================================================
+
+model:
+  name: "llama3_2_3b"
+  family: "llama"
+  version: "3B"
+  base_model_path: ""               # 基础模型路径
+                                    # 示例: "/path/to/Llama-3.2-3B-Vision"
+  description: "Meta Llama3.2 3B Vision-Language Model"
+
+data_preparation:
+  coord_norm: "norm_1"              # Llama 推荐使用 [0, 1] 归一化
+                                    # 这是 COCO 格式的标准归一化
+  
+  coord_format: "xyxy"              # Llama 使用 xyxy 格式
+                                    # [x_min, y_min, x_max, y_max]
+  
+  output_format: "box_2d_json"      # JSON 数组格式
+  
+  prompt:
+    lang: "en"                      # Llama3.2 英文能力强
+    style: "descriptive"
+  
+  split:
+    ratio: "8:1:1"
+    method: "random"
+    seed: 42
+  
+  filter:
+    class_whitelist: []
+    class_blacklist: []
+    class_remap: {}
+    shape_types:
+      - "rectangle"
+    min_bbox_size: 2
+    keep_empty: false
+
+model_loading:
+  max_seq_length: 2048              # Llama3.2 序列长度
+  
+  quantization:
+    load_in_4bit: true
+    load_in_8bit: false
+  
+  attention:
+    implementation: "sdpa"
+  
+  options:
+    use_cache: true
+    trust_remote_code: false
+
+lora:
+  r: 16                             # Llama3.2 推荐秩
+  alpha: 16
+  dropout: 0
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"                   # Llama 扩展模块
+    - "up_proj"
+    - "down_proj"
+  bias: "none"
+  use_rslora: false
+
+training:
+  num_epochs: 1
+  per_device_batch_size: 8
+  gradient_accumulation_steps: 2
+  learning_rate: 2e-5               # Llama 推荐学习率
+  lr_scaling: "sqrt"
+  warmup_ratio: 0.1
+  
+  optimizer:
+    type: "adamw_8bit"
+    weight_decay: 0.01
+    max_grad_norm: 1.0
+  
+  precision:
+    bf16: true
+    fp16: false
+    tf32: true
+  
+  vision:
+    enabled: true                   # Llama3.2-Vision 是 Vision 模型
+    image_width: 896
+    image_height: 896
+    image_load_mode: "lazy"
+
+distributed:
+  mode: "ddp"
+  num_gpus: 8
+  
+  ddp:
+    backend: "nccl"
+  
+  fsdp:
+    sharding_strategy: "FULL_SHARD"
+    auto_wrap_policy: "TRANSFORMER_BASED_WRAP"
+    backward_prefetch: "BACKWARD_PRE"
+    cpu_offload: false
+    min_num_params: 1000
+
+dataloader:
+  num_workers: 4
+  prefetch_factor: 4
+  pin_memory: true
+  persistent_workers: true
+  drop_last: false
+
+output:
+  base_dir: "models/finetuned"
+  save_strategy: "steps"
+  save_steps: 500
+  save_total_limit: 3
+  
+  logging:
+    log_level: "INFO"
+    log_steps: 10
+    report_to: "tensorboard"
+
+evaluation:
+  eval_strategy: "steps"
+  eval_steps: 100
+  eval_on_start: false
+  metrics:
+    - "loss"
+  post_training_eval:
+    auto_run: false
+    raise_on_error: false
+
+inference:
+  max_new_tokens: 128
+  temperature: 0.1
+  top_p: 0.9
+  top_k: 50
+  do_sample: true
+
+notes:
+  coordinate_format_info: |
+    Llama3.2 使用 xyxy 格式和 norm_1 归一化
+    与 Gemma4 的 yxyx/norm_1000 不同
+  
+  lora_modules_info: |
+    Llama3.2 推荐在更多模块上应用 LoRA:
+    - 基础: q_proj, k_proj, v_proj, o_proj
+    - 扩展: gate_proj, up_proj, down_proj (可选)
