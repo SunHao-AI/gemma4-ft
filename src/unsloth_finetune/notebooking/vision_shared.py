@@ -19,8 +19,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 from unsloth_finetune.data.labelme.detection_format import (
     DetectionPromptBuilder,
-    build_cn_normalized_detection_prompt,
-    build_en_normalized_detection_prompt,
+    build_cn_detection_prompt,
+    build_en_detection_prompt,
     convert_xyxy_to_format,
 )
 from unsloth_finetune.training.distributed.adapter_utils import prepared_adapter_dir
@@ -263,7 +263,7 @@ class ObjectDetector:
     def __init__(
         self,
         model_loader: ModelLoader,
-        prompt_builder: DetectionPromptBuilder = build_en_normalized_detection_prompt,
+        prompt_builder: DetectionPromptBuilder = build_en_detection_prompt,
         temperature: float = 0.7,
         top_p: float = 0.9,
         coord_format: str = "xyxy",
@@ -446,16 +446,17 @@ class ObjectDetector:
         def _is_normalized(coords: list) -> bool:
             return all(0 <= v <= 1 for v in coords)
 
-        def _is_1000_based(coords: list) -> bool:
-            return all(0 <= v <= 1000 for v in coords) and not _is_normalized(coords)
-
         def _effective_norm(coords: list) -> str:
             if coord_norm != "auto":
                 return coord_norm
             if _is_normalized(coords):
                 return "norm_1"
-            if _is_1000_based(coords):
+            if all(0 <= v <= 1000 for v in coords):
                 return "norm_1000"
+            max_x = max(coords[0], coords[2])
+            max_y = max(coords[1], coords[3])
+            if max_x <= width and max_y <= height:
+                return "raw"
             return "raw"
 
         def convert_coords(coords: list) -> Tuple[int, int, int, int]:
@@ -751,7 +752,7 @@ class ObjectDetectionPipeline:
     def __init__(
         self,
         model_config: Dict[str, Any],
-        prompt_builder: DetectionPromptBuilder = build_cn_normalized_detection_prompt,
+        prompt_builder: DetectionPromptBuilder = build_cn_detection_prompt,
         temperature: float = 0.7,
         top_p: float = 0.9,
         coord_format: str = "xyxy",

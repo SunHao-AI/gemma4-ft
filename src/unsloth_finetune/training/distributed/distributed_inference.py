@@ -38,8 +38,8 @@ from unsloth_finetune.training.distributed.load_balancer import (
 from unsloth_finetune.training.distributed.adapter_utils import prepared_adapter_dir
 from unsloth_finetune.data.labelme.detection_format import (
     DetectionPromptBuilder,
-    build_cn_normalized_detection_prompt,
-    build_en_normalized_detection_prompt,
+    build_cn_detection_prompt,
+    build_en_detection_prompt,
     convert_xyxy_to_format,
 )
 
@@ -61,10 +61,7 @@ def verbose_status_enabled() -> bool:
 
 
 def parse_live_tqdm_ranks() -> Optional[set]:
-    raw = (
-        get_env_value("UNSLOTH_LIVE_TQDM_RANKS", "GEMMA4_LIVE_TQDM_RANKS").strip().lower()
-        or "none"
-    )
+    raw = get_env_value("UNSLOTH_LIVE_TQDM_RANKS", "GEMMA4_LIVE_TQDM_RANKS").strip().lower() or "none"
     if not raw or raw in {"none", "off", "disabled"}:
         return set()
     if raw in {"all", "*"}:
@@ -185,13 +182,7 @@ def format_progress_summary(
 ) -> str:
     width = max(3, len(str(max(total, completed, processed, failed, remaining, 0))))
     model_label = f"{model_type:<9}"
-    return (
-        f"{model_label} 数据集共 {total:>{width}} 条，"
-        f"当前已处理 {completed:>{width}} 条，"
-        f"成功 {processed:>{width}} 条，"
-        f"失败 {failed:>{width}} 条，"
-        f"剩余 {remaining:>{width}} 条"
-    )
+    return f"{model_label} 数据集共 {total:>{width}} 条，" f"当前已处理 {completed:>{width}} 条，" f"成功 {processed:>{width}} 条，" f"失败 {failed:>{width}} 条，" f"剩余 {remaining:>{width}} 条"
 
 
 def create_inference_progress_bar(
@@ -394,9 +385,7 @@ class DatasetLoader:
         output_format = metadata.get("output_format", "labelme_text")
         if output_format == "box_2d_json" or assistant_text.lstrip().startswith("["):
             try:
-                box_2d_results = parse_box_2d_json_ground_truth(
-                    assistant_text, img_width, img_height
-                )
+                box_2d_results = parse_box_2d_json_ground_truth(assistant_text, img_width, img_height)
                 if box_2d_results:
                     return box_2d_results
             except Exception:
@@ -500,9 +489,7 @@ class ModelLoader:
 
         unexpected = [device for device in targets if device != expected_device]
         if unexpected:
-            raise RuntimeError(
-                f"model_device_mismatch: expected={expected_device}, actual={','.join(targets)}"
-            )
+            raise RuntimeError(f"model_device_mismatch: expected={expected_device}, actual={','.join(targets)}")
 
     def load_model(self) -> bool:
         try:
@@ -581,9 +568,7 @@ class ModelLoader:
 
 
 class ObjectDetector:
-    def __init__(self, model_loader: ModelLoader,
-                 prompt_builder: Optional[DetectionPromptBuilder] = None,
-                 coord_format: str = "xyxy"):
+    def __init__(self, model_loader: ModelLoader, prompt_builder: Optional[DetectionPromptBuilder] = None, coord_format: str = "xyxy"):
         self.model_loader = model_loader
         self.prompt_builder = prompt_builder
         self.coord_format = coord_format
@@ -594,19 +579,20 @@ class ObjectDetector:
             return query_text
 
         # 训练数据里的 query 已经是完整自然语言指令时，评估直接复用，
-        # 避免再套一层模板造成“请分析这张图像，请分析这张图片...”的口径漂移。
+        # 避免再套一层模板造成口径漂移。
         if (
             "识别并定位其中的" in query_text
-            or query_text.startswith("请分析这张图像")
-            or query_text.startswith("请分析这张图片")
-            or query_text.startswith("Analyze this image carefully")
-            or "\"box_2d\"" in query_text
+            or query_text.startswith("请检测图片中")
+            or query_text.startswith("请检测图片")
+            or query_text.startswith("Please detect")
+            or query_text.startswith("Detect")
         ):
             return query_text
 
         if self.prompt_builder:
             return self.prompt_builder(query_text)
-        return build_en_normalized_detection_prompt(query_text)
+        return build_en_detection_prompt(query_text)
+
     def _resolve_model_device(self, model) -> torch.device:
         model_device = getattr(model, "device", None)
         if model_device is not None:
@@ -642,10 +628,7 @@ class ObjectDetector:
             ]
             for image, prompt in zip(images, prompts)
         ]
-        texts = [
-            processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-            for messages in messages_batch
-        ]
+        texts = [processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True) for messages in messages_batch]
         processor_kwargs = {
             "text": texts,
             "images": images,
@@ -749,8 +732,7 @@ class ObjectDetector:
                     results.append(single)
         return results
 
-    def _parse_response(self, response: str, width: int, height: int,
-                        coord_format: str = "xyxy") -> List[Dict[str, Any]]:
+    def _parse_response(self, response: str, width: int, height: int, coord_format: str = "xyxy") -> List[Dict[str, Any]]:
         detections = []
 
         def is_normalized(coords: list) -> bool:
@@ -811,9 +793,7 @@ class ObjectDetector:
             detections.append(
                 {
                     "bbox": [sanitized[0], sanitized[1], sanitized[2], sanitized[3]],
-                    "bbox_out": convert_xyxy_to_format(
-                        sanitized[0], sanitized[1], sanitized[2], sanitized[3], coord_format
-                    ),
+                    "bbox_out": convert_xyxy_to_format(sanitized[0], sanitized[1], sanitized[2], sanitized[3], coord_format),
                     "label": item.get("label", "object"),
                     "confidence": max(0.0, min(confidence, 1.0)),
                 }
@@ -1111,8 +1091,7 @@ def wait_for_partial_results(
         time.sleep(0.2)
 
     raise RuntimeError(
-        f"partial_results_incomplete: model_type={model_type}, expected_parts={expected_parts}, "
-        f"seen_parts={last_seen_parts}, expected_results={expected_total}, seen_results={last_seen_results}"
+        f"partial_results_incomplete: model_type={model_type}, expected_parts={expected_parts}, " f"seen_parts={last_seen_parts}, expected_results={expected_total}, seen_results={last_seen_results}"
     )
 
 
@@ -1564,13 +1543,11 @@ def parse_args():
     parser.add_argument("--scheduler_mode", choices=("static_partition", "dynamic_queue"), default="static_partition")
     parser.add_argument("--partition_strategy", choices=("contiguous", "round_robin"), default="round_robin")
     parser.add_argument("--queue_batch_size", type=int, default=None)
-    parser.add_argument("--coord_format", choices=("xyxy", "xywh", "cxcywh"), default="xyxy",
-                        help="输出bbox格式: xyxy, xywh, 或 cxcywh")
-    parser.add_argument("--attn_implementation", type=str, default=None,
-                        choices=["sdpa", "flash_attention_2", "eager"],
-                        help="注意力实现方式: sdpa(推荐), flash_attention_2, eager. None则由Unsloth自动选择")
-    parser.add_argument("--enable_compile", action="store_true", default=False,
-                        help="启用torch.compile (默认禁用, 仅在推理场景且确认稳定时启用)")
+    parser.add_argument("--coord_format", choices=("xyxy", "xywh", "cxcywh"), default="xyxy", help="输出bbox格式: xyxy, xywh, 或 cxcywh")
+    parser.add_argument(
+        "--attn_implementation", type=str, default=None, choices=["sdpa", "flash_attention_2", "eager"], help="注意力实现方式: sdpa(推荐), flash_attention_2, eager. None则由Unsloth自动选择"
+    )
+    parser.add_argument("--enable_compile", action="store_true", default=False, help="启用torch.compile (默认禁用, 仅在推理场景且确认稳定时启用)")
     return parser.parse_args()
 
 
@@ -1583,8 +1560,8 @@ def main():
     INFERENCE_TOP_P = args.top_p
     INFERENCE_MAX_NEW_TOKENS = args.max_new_tokens
 
-    # Resolve prompt builder (always normalized xyxy) and coord format
-    prompt_builder = build_cn_normalized_detection_prompt
+    # Resolve prompt builder (matches training prompt format) and coord format
+    prompt_builder = build_cn_detection_prompt
     coord_format = args.coord_format
 
     rank = None
@@ -1648,8 +1625,7 @@ def main():
                 coord_format=coord_format,
             )
         else:
-            ft_results, ft_stats = run_model_round("finetuned", partition_records, args, rank, local_rank, physical_gpu,
-                                                              prompt_builder=prompt_builder, coord_format=coord_format)
+            ft_results, ft_stats = run_model_round("finetuned", partition_records, args, rank, local_rank, physical_gpu, prompt_builder=prompt_builder, coord_format=coord_format)
         barrier()
         if args.scheduler_mode == "dynamic_queue" and rank == 0:
             ft_snapshot = validate_dynamic_queue_round(
@@ -1659,8 +1635,7 @@ def main():
                 world_size=world_size,
             )
             log(
-                f"round 1 queue verified: total={ft_snapshot['total']}, completed={ft_snapshot['completed']}, "
-                f"failed={ft_snapshot['failed']}, remaining={ft_snapshot['remaining']}",
+                f"round 1 queue verified: total={ft_snapshot['total']}, completed={ft_snapshot['completed']}, " f"failed={ft_snapshot['failed']}, remaining={ft_snapshot['remaining']}",
                 rank=rank,
             )
         barrier()
@@ -1712,8 +1687,7 @@ def main():
                 coord_format=coord_format,
             )
         else:
-            base_results, base_stats = run_model_round("base", partition_records, args, rank, local_rank, physical_gpu,
-                                                          prompt_builder=prompt_builder, coord_format=coord_format)
+            base_results, base_stats = run_model_round("base", partition_records, args, rank, local_rank, physical_gpu, prompt_builder=prompt_builder, coord_format=coord_format)
         barrier()
         if args.scheduler_mode == "dynamic_queue" and rank == 0:
             base_snapshot = validate_dynamic_queue_round(
@@ -1723,8 +1697,7 @@ def main():
                 world_size=world_size,
             )
             log(
-                f"round 2 queue verified: total={base_snapshot['total']}, completed={base_snapshot['completed']}, "
-                f"failed={base_snapshot['failed']}, remaining={base_snapshot['remaining']}",
+                f"round 2 queue verified: total={base_snapshot['total']}, completed={base_snapshot['completed']}, " f"failed={base_snapshot['failed']}, remaining={base_snapshot['remaining']}",
                 rank=rank,
             )
         barrier()
@@ -1875,8 +1848,7 @@ def main():
 
                 if ft_export["failed"] or base_export["failed"]:
                     log(
-                        "labelme export completed with errors: "
-                        f"finetuned_failed={ft_export['failed']}, base_failed={base_export['failed']}",
+                        "labelme export completed with errors: " f"finetuned_failed={ft_export['failed']}, base_failed={base_export['failed']}",
                         rank=rank,
                     )
             else:
@@ -1885,23 +1857,15 @@ def main():
             log(f"all done in {summary['total_seconds']:.2f}s", rank=rank)
             log(f"finetuned samples={len(merged_ft_results)}, base samples={len(merged_base_results)}", rank=rank)
             log(
-                "load balance reports: "
-                f"finetuned={ft_load_balance['markdown_path']}, "
-                f"base={base_load_balance['markdown_path']}",
+                "load balance reports: " f"finetuned={ft_load_balance['markdown_path']}, " f"base={base_load_balance['markdown_path']}",
                 rank=rank,
             )
             log(
-                "finetuned metrics: "
-                f"precision={ft_metrics.get('mean_precision', 0):.3f}, "
-                f"recall={ft_metrics.get('mean_recall', 0):.3f}, "
-                f"f1={ft_metrics.get('mean_f1', 0):.3f}",
+                "finetuned metrics: " f"precision={ft_metrics.get('mean_precision', 0):.3f}, " f"recall={ft_metrics.get('mean_recall', 0):.3f}, " f"f1={ft_metrics.get('mean_f1', 0):.3f}",
                 rank=rank,
             )
             log(
-                "base metrics: "
-                f"precision={base_metrics.get('mean_precision', 0):.3f}, "
-                f"recall={base_metrics.get('mean_recall', 0):.3f}, "
-                f"f1={base_metrics.get('mean_f1', 0):.3f}",
+                "base metrics: " f"precision={base_metrics.get('mean_precision', 0):.3f}, " f"recall={base_metrics.get('mean_recall', 0):.3f}, " f"f1={base_metrics.get('mean_f1', 0):.3f}",
                 rank=rank,
             )
             log(f"labelme files: finetuned={ft_labelme_count}, base={base_labelme_count}", rank=rank)
@@ -1916,4 +1880,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
