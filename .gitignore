@@ -10,8 +10,6 @@ htmlcov/
 build/
 dist/
 .ipynb_checkpoints/
-tmp_notebook_cells/
-tmp_notebook_cells2/
 AGENTS.md
 *.egg-info/
 unsloth_compiled_cache/
@@ -20,3 +18,4 @@ flash_attention_env_report.json
 .claude/
 data/*
 models/*
+*logs/*

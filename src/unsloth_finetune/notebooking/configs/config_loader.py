@@ -295,13 +295,13 @@ class TrainingConfigLoader:
             prompt_style=prompt_cfg.get("style", "descriptive"),
             split_ratio=split_cfg.get("ratio", "8:1:1"),
             split_method=split_cfg.get("method", "random"),
-            split_seed=split_cfg.get("seed"),
+            split_seed=int(split_cfg.get("seed")) if split_cfg.get("seed") is not None else None,
             class_whitelist=filter_cfg.get("class_whitelist", []),
             class_blacklist=filter_cfg.get("class_blacklist", []),
             class_remap=filter_cfg.get("class_remap", {}),
             shape_types=filter_cfg.get("shape_types", ["rectangle", "polygon"]),
-            min_bbox_size=filter_cfg.get("min_bbox_size", 2),
-            keep_empty=filter_cfg.get("keep_empty", False),
+            min_bbox_size=int(filter_cfg.get("min_bbox_size", 2)),
+            keep_empty=bool(filter_cfg.get("keep_empty", False)),
         )
 
     def _parse_model_loading_config(self) -> None:
@@ -311,24 +311,24 @@ class TrainingConfigLoader:
         opt_cfg = cfg.get("options", {})
 
         self.model_loading = ModelLoadingConfig(
-            max_seq_length=cfg.get("max_seq_length", 2048),
-            load_in_4bit=quant_cfg.get("load_in_4bit", True),
-            load_in_8bit=quant_cfg.get("load_in_8bit", False),
+            max_seq_length=int(cfg.get("max_seq_length", 2048)),
+            load_in_4bit=bool(quant_cfg.get("load_in_4bit", True)),
+            load_in_8bit=bool(quant_cfg.get("load_in_8bit", False)),
             attention_implementation=attn_cfg.get("implementation", "sdpa"),
-            use_cache=opt_cfg.get("use_cache", True),
-            trust_remote_code=opt_cfg.get("trust_remote_code", False),
+            use_cache=bool(opt_cfg.get("use_cache", True)),
+            trust_remote_code=bool(opt_cfg.get("trust_remote_code", False)),
         )
 
     def _parse_lora_config(self) -> None:
         cfg = self._raw_config.get("lora", {})
 
         self.lora = LoRAConfig(
-            r=cfg.get("r", 16),
-            alpha=cfg.get("alpha", 16),
-            dropout=cfg.get("dropout", 0.0),
+            r=int(cfg.get("r", 16)),
+            alpha=int(cfg.get("alpha", 16)),
+            dropout=float(cfg.get("dropout", 0.0)),
             target_modules=cfg.get("target_modules", ["q_proj", "k_proj", "v_proj", "o_proj"]),
             bias=cfg.get("bias", "none"),
-            use_rslora=cfg.get("use_rslora", False),
+            use_rslora=bool(cfg.get("use_rslora", False)),
         )
 
     def _parse_training_config(self) -> None:
@@ -363,24 +363,24 @@ class TrainingConfigLoader:
 
         self.distributed = DistributedConfig(
             mode=cfg.get("mode", "ddp"),
-            num_gpus=cfg.get("num_gpus", 8),
+            num_gpus=int(cfg.get("num_gpus", 8)),
             ddp_backend=ddp_cfg.get("backend", "nccl"),
             fsdp_sharding_strategy=fsdp_cfg.get("sharding_strategy", "FULL_SHARD"),
             fsdp_auto_wrap_policy=fsdp_cfg.get("auto_wrap_policy", "TRANSFORMER_BASED_WRAP"),
             fsdp_backward_prefetch=fsdp_cfg.get("backward_prefetch", "BACKWARD_PRE"),
-            fsdp_cpu_offload=fsdp_cfg.get("cpu_offload", False),
-            fsdp_min_num_params=fsdp_cfg.get("min_num_params", 1000),
+            fsdp_cpu_offload=bool(fsdp_cfg.get("cpu_offload", False)),
+            fsdp_min_num_params=int(fsdp_cfg.get("min_num_params", 1000)),
         )
 
     def _parse_dataloader_config(self) -> None:
         cfg = self._raw_config.get("dataloader", {})
 
         self.dataloader = DataLoaderConfig(
-            num_workers=cfg.get("num_workers", 4),
-            prefetch_factor=cfg.get("prefetch_factor", 4),
-            pin_memory=cfg.get("pin_memory", True),
-            persistent_workers=cfg.get("persistent_workers", True),
-            drop_last=cfg.get("drop_last", False),
+            num_workers=int(cfg.get("num_workers", 4)),
+            prefetch_factor=int(cfg.get("prefetch_factor", 4)),
+            pin_memory=bool(cfg.get("pin_memory", True)),
+            persistent_workers=bool(cfg.get("persistent_workers", True)),
+            drop_last=bool(cfg.get("drop_last", False)),
         )
 
     def _parse_output_config(self) -> None:
@@ -390,10 +390,10 @@ class TrainingConfigLoader:
         self.output = OutputConfig(
             base_dir=cfg.get("base_dir", "models/finetuned"),
             save_strategy=cfg.get("save_strategy", "steps"),
-            save_steps=cfg.get("save_steps", 500),
-            save_total_limit=cfg.get("save_total_limit", 3),
+            save_steps=int(cfg.get("save_steps", 500)),
+            save_total_limit=int(cfg.get("save_total_limit", 3)),
             log_level=log_cfg.get("log_level", "INFO"),
-            log_steps=log_cfg.get("log_steps", 10),
+            log_steps=int(log_cfg.get("log_steps", 10)),
             report_to=log_cfg.get("report_to", "tensorboard"),
         )
 
