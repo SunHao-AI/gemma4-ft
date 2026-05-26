@@ -311,10 +311,7 @@ class ObjectDetector:
             ]
             for image, prompt in zip(images, prompts)
         ]
-        texts = [
-            processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-            for messages in messages_batch
-        ]
+        texts = [processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True) for messages in messages_batch]
 
         processor_kwargs = {
             "text": texts,
@@ -363,7 +360,9 @@ class ObjectDetector:
             response = self._decode_generated_responses(processor, inputs, outputs)[0]
             width, height = image.size
             detections = self.parse_response(
-                response, width, height,
+                response,
+                width,
+                height,
                 coord_format=self.coord_format,
                 coord_norm=self.coord_norm,
             )
@@ -413,7 +412,9 @@ class ObjectDetector:
                 for image, query, response in zip(image_batch, query_batch, responses):
                     width, height = image.size
                     detections = self.parse_response(
-                        response, width, height,
+                        response,
+                        width,
+                        height,
                         coord_format=self.coord_format,
                         coord_norm=self.coord_norm,
                     )
@@ -446,33 +447,55 @@ class ObjectDetector:
         def _is_normalized(coords: list) -> bool:
             return all(0 <= v <= 1 for v in coords)
 
-        def _effective_norm(coords: list) -> str:
+        def _effective_norm(coords: list, fmt: str) -> str:
             if coord_norm != "auto":
                 return coord_norm
             if _is_normalized(coords):
                 return "norm_1"
             if all(0 <= v <= 1000 for v in coords):
                 return "norm_1000"
-            max_x = max(coords[0], coords[2])
-            max_y = max(coords[1], coords[3])
+            if fmt == "yxyx":
+                max_x = max(coords[1], coords[3])
+                max_y = max(coords[0], coords[2])
+            elif fmt == "xywh":
+                max_x = coords[0] + coords[2]
+                max_y = coords[1] + coords[3]
+            elif fmt == "cxcywh":
+                max_x = coords[0] + coords[2] / 2
+                max_y = coords[1] + coords[3] / 2
+            else:
+                max_x = max(coords[0], coords[2])
+                max_y = max(coords[1], coords[3])
             if max_x <= width and max_y <= height:
                 return "raw"
             return "raw"
 
-        def convert_coords(coords: list) -> Tuple[int, int, int, int]:
-            eff = _effective_norm(coords)
+        def convert_coords(coords: list, fmt: str) -> Tuple[int, int, int, int]:
+            eff = _effective_norm(coords, fmt)
+            if fmt == "yxyx":
+                raw_y1, raw_x1, raw_y2, raw_x2 = coords[0], coords[1], coords[2], coords[3]
+            elif fmt == "xywh":
+                raw_x1, raw_y1, raw_w, raw_h = coords[0], coords[1], coords[2], coords[3]
+                raw_x2, raw_y2 = raw_x1 + raw_w, raw_y1 + raw_h
+            elif fmt == "cxcywh":
+                raw_cx, raw_cy, raw_w, raw_h = coords[0], coords[1], coords[2], coords[3]
+                raw_x1, raw_y1 = raw_cx - raw_w / 2, raw_cy - raw_h / 2
+                raw_x2, raw_y2 = raw_cx + raw_w / 2, raw_cy + raw_h / 2
+            else:
+                raw_x1, raw_y1, raw_x2, raw_y2 = coords[0], coords[1], coords[2], coords[3]
+
             if eff == "norm_1":
-                x1 = int(coords[0] * width)
-                y1 = int(coords[1] * height)
-                x2 = int(coords[2] * width)
-                y2 = int(coords[3] * height)
+                x1 = int(raw_x1 * width)
+                y1 = int(raw_y1 * height)
+                x2 = int(raw_x2 * width)
+                y2 = int(raw_y2 * height)
             elif eff == "norm_1000":
-                x1 = int(coords[0] / 1000 * width)
-                y1 = int(coords[1] / 1000 * height)
-                x2 = int(coords[2] / 1000 * width)
-                y2 = int(coords[3] / 1000 * height)
-            else:  # raw pixel coords
-                x1, y1, x2, y2 = int(coords[0]), int(coords[1]), int(coords[2]), int(coords[3])
+                x1 = int(raw_x1 / 1000 * width)
+                y1 = int(raw_y1 / 1000 * height)
+                x2 = int(raw_x2 / 1000 * width)
+                y2 = int(raw_y2 / 1000 * height)
+            else:
+                x1, y1, x2, y2 = int(raw_x1), int(raw_y1), int(raw_x2), int(raw_y2)
             return x1, y1, x2, y2
 
         def sanitize_box(x1: int, y1: int, x2: int, y2: int):
@@ -508,7 +531,7 @@ class ObjectDetector:
             if not isinstance(coords, list) or len(coords) != 4:
                 return
 
-            x1, y1, x2, y2 = convert_coords(coords)
+            x1, y1, x2, y2 = convert_coords(coords, coord_format)
             sanitized = sanitize_box(x1, y1, x2, y2)
             if sanitized is None:
                 return
@@ -522,9 +545,7 @@ class ObjectDetector:
             detections.append(
                 {
                     "bbox": [sanitized[0], sanitized[1], sanitized[2], sanitized[3]],
-                    "bbox_out": convert_xyxy_to_format(
-                        sanitized[0], sanitized[1], sanitized[2], sanitized[3], coord_format
-                    ),
+                    "bbox_out": convert_xyxy_to_format(sanitized[0], sanitized[1], sanitized[2], sanitized[3], coord_format),
                     "label": item.get("label", "object"),
                     "confidence": max(0.0, min(confidence, 1.0)),
                 }
@@ -837,4 +858,3 @@ class ObjectDetectionPipeline:
 
         result["success"] = True
         return result
-
