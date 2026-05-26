@@ -462,3 +462,22 @@ def get_cached_font_path() -> Optional[Path]:
     if _validate_font_file(cached_font):
         return cached_font
     return None
+
+
+def get_chinese_font_path_for_pil(auto_download: bool = True) -> Optional[Path]:
+    font_files = scan_chinese_font_files()
+
+    priority_fonts = ["wqy-microhei", "NotoSansCJK", "WenQuanYi", "msyh", "MicrosoftYaHei", "SimHei"]
+    for priority in priority_fonts:
+        for font_file in font_files:
+            if priority.lower() in font_file.lower():
+                return Path(font_file)
+
+    if font_files:
+        return Path(font_files[0])
+
+    if auto_download:
+        download_and_register_chinese_font()
+        return get_cached_font_path()
+
+    return get_cached_font_path()

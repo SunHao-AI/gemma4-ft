@@ -15,7 +15,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import requests
 import torch
-from PIL import Image, ImageDraw, ImageFont
+from matplotlib.patches import Rectangle
+from PIL import Image
 
 from unsloth_finetune.data.labelme.detection_format import (
     DetectionPromptBuilder,
@@ -466,8 +467,6 @@ class ObjectDetector:
             else:
                 max_x = max(coords[0], coords[2])
                 max_y = max(coords[1], coords[3])
-            if max_x <= width and max_y <= height:
-                return "raw"
             return "raw"
 
         def convert_coords(coords: list, fmt: str) -> Tuple[int, int, int, int]:
@@ -600,57 +599,84 @@ class DetectionVisualizer:
         "#FF3838",
     ]
 
-    def __init__(self, colors: Optional[Sequence[str]] = None, font_size: int = 20):
+    def __init__(self, colors: Optional[Sequence[str]] = None, font_size: int = 12):
         self.colors = list(colors or self.DEFAULT_COLORS)
         self.font_size = font_size
-        self.font = self._load_font()
-
-    def _load_font(self):
-        font_candidates = [
-            ("Microsoft YaHei", "msyh.ttc"),
-            ("SimHei", "simhei.ttf"),
-            ("SimSun", "simsun.ttc"),
-            ("Arial", "arial.ttf"),
-        ]
-
-        font_dir = None
-        system = platform.system()
-        if system == "Windows":
-            font_dir = Path("C:/Windows/Fonts")
-        elif system == "Linux":
-            font_dir = Path("/usr/share/fonts")
-
-        for font_name, font_file in font_candidates:
-            try:
-                return ImageFont.truetype(font_name, self.font_size)
-            except Exception:
-                pass
-
-            if font_dir and font_dir.exists():
-                font_path = font_dir / font_file
-                if font_path.exists():
-                    try:
-                        return ImageFont.truetype(str(font_path), self.font_size)
-                    except Exception:
-                        pass
-
-        # 系统字体均不可用 → 尝试使用下载缓存的 Noto Sans CJK SC
-        from unsloth_finetune.tools.font_utils import get_cached_font_path
-
-        cached_font = get_cached_font_path()
-        if cached_font is not None:
-            try:
-                return ImageFont.truetype(str(cached_font), self.font_size)
-            except Exception:
-                pass
-
-        try:
-            return ImageFont.load_default(size=self.font_size)
-        except TypeError:
-            return ImageFont.load_default()
 
     def _get_color(self, index: int) -> str:
         return self.colors[index % len(self.colors)]
+
+    def draw_detections_on_axes(
+        self,
+        ax,
+        image: Image.Image,
+        detections: Sequence[Dict[str, Any]],
+        box_width: float = 2.0,
+        show_confidence: bool = True,
+        title: Optional[str] = None,
+    ) -> None:
+        ax.imshow(image)
+
+        if not detections:
+            if title:
+                ax.set_title(title)
+            ax.axis("off")
+            return
+
+        img_width, img_height = image.size
+
+        for index, detection in enumerate(detections):
+            bbox = detection.get("bbox", [0, 0, 0, 0])
+            label = detection.get("label", "未知")
+            confidence = detection.get("confidence", 0)
+
+            if len(bbox) != 4 or not all(isinstance(value, (int, float)) for value in bbox):
+                continue
+
+            x1, y1, x2, y2 = bbox[0], bbox[1], bbox[2], bbox[3]
+            color = self._get_color(index)
+
+            box_width_scaled = box_width * (img_width / 500)
+
+            rect = Rectangle(
+                (x1, y1),
+                x2 - x1,
+                y2 - y1,
+                linewidth=box_width_scaled,
+                edgecolor=color,
+                facecolor="none",
+            )
+            ax.add_patch(rect)
+
+            text = f"{label} {confidence:.0%}" if show_confidence else str(label)
+
+            text_bbox = ax.text(x1, y1, text, fontsize=self.font_size, color="white", verticalalignment="top")
+            renderer = ax.figure.canvas.get_renderer()
+            text_extents = text_bbox.get_window_extent(renderer)
+            text_extents_data = text_extents.transformed(ax.transData.inverted())
+            text_width_data = text_extents_data.width
+            text_height_data = text_extents_data.height
+
+            label_y1 = y1 - text_height_data - 2
+            if label_y1 < 0:
+                label_y1 = y1 + 2
+            label_y2 = label_y1 + text_height_data
+
+            text_bbox.set_position((x1 + 1, label_y1 + 0.5))
+
+            label_bg = Rectangle(
+                (x1, label_y1),
+                text_width_data + 2,
+                text_height_data + 1,
+                facecolor=color,
+                edgecolor="none",
+                zorder=text_bbox.get_zorder() - 1,
+            )
+            ax.add_patch(label_bg)
+
+        if title:
+            ax.set_title(title)
+        ax.axis("off")
 
     def draw_detections(
         self,
@@ -662,52 +688,47 @@ class DetectionVisualizer:
         if not detections:
             return image
 
-        img_draw = image.copy()
-        draw = ImageDraw.Draw(img_draw)
+        import matplotlib.pyplot as plt
 
-        for index, detection in enumerate(detections):
-            bbox = detection.get("bbox", [0, 0, 0, 0])
-            label = detection.get("label", "未知")
-            confidence = detection.get("confidence", 0)
+        fig, ax = plt.subplots(figsize=(image.width / 100, image.height / 100), dpi=100)
+        self.draw_detections_on_axes(ax, image, detections, box_width=float(box_width), show_confidence=show_confidence)
 
-            if len(bbox) != 4 or not all(isinstance(value, (int, float)) for value in bbox):
-                continue
+        fig.tight_layout(pad=0)
+        fig.canvas.draw()
 
-            x1, y1, x2, y2 = (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))
-            color = self._get_color(index)
-            draw.rectangle([x1, y1, x2, y2], outline=color, width=box_width)
+        buf = BytesIO()
+        fig.savefig(buf, format="png", bbox_inches="tight", pad_inches=0, dpi=100)
+        buf.seek(0)
+        result_image = Image.open(buf).convert("RGB")
 
-            text = f"{label} {confidence:.0%}" if show_confidence else str(label)
-            text_bbox = draw.textbbox((x1, y1), text, font=self.font)
-            text_width = text_bbox[2] - text_bbox[0]
-            text_height = text_bbox[3] - text_bbox[1]
+        plt.close(fig)
 
-            fill_y1 = y1 - text_height - 4
-            if fill_y1 < 0:
-                fill_y1 = y1 + 4
-            fill_y2 = fill_y1 + text_height + 2
+        if result_image.size != image.size:
+            result_image = result_image.resize(image.size, Image.LANCZOS)
 
-            draw.rectangle([x1, fill_y1, x1 + text_width + 4, fill_y2], fill=color)
-            draw.text((x1 + 2, fill_y1 + 1), text, fill="white", font=self.font)
-
-        return img_draw
+        return result_image
 
     def display_result(
         self,
         plt_module,
         original: Image.Image,
-        result: Image.Image,
         detections: Sequence[Dict[str, Any]],
         figsize: Tuple[int, int] = (15, 8),
+        show_confidence: bool = True,
     ) -> None:
         fig, axes = plt_module.subplots(1, 2, figsize=figsize)
+
         axes[0].imshow(original)
         axes[0].set_title("原始图像")
         axes[0].axis("off")
 
-        axes[1].imshow(result)
-        axes[1].set_title(f"检测结果 ({len(detections)} 个目标)")
-        axes[1].axis("off")
+        self.draw_detections_on_axes(
+            axes[1],
+            original,
+            detections,
+            show_confidence=show_confidence,
+            title=f"检测结果 ({len(detections)} 个目标)",
+        )
 
         plt_module.tight_layout()
         plt_module.show()
@@ -721,11 +742,26 @@ class DetectionVisualizer:
         else:
             print("\n未检测到目标")
 
-    def save_result(self, image: Image.Image, output_path: str) -> bool:
+    def save_result(
+        self,
+        plt_module,
+        image: Image.Image,
+        detections: Sequence[Dict[str, Any]],
+        output_path: str,
+        box_width: int = 3,
+        show_confidence: bool = True,
+    ) -> bool:
         try:
             output_dir = Path(output_path).parent
             output_dir.mkdir(parents=True, exist_ok=True)
-            image.save(output_path, quality=95)
+
+            fig, ax = plt_module.subplots(figsize=(image.width / 100, image.height / 100), dpi=100)
+            self.draw_detections_on_axes(ax, image, detections, box_width=float(box_width), show_confidence=show_confidence)
+
+            fig.tight_layout(pad=0)
+            fig.savefig(output_path, bbox_inches="tight", pad_inches=0, dpi=100)
+            plt_module.close(fig)
+
             print(f"结果已保存: {output_path}")
             return True
         except Exception as exc:
@@ -750,13 +786,8 @@ class ComparisonVisualizer(DetectionVisualizer):
         ax2 = fig.add_subplot(gs[0, 1])
         ax3 = fig.add_subplot(gs[1, :])
 
-        ax1.imshow(self.draw_detections(image, det_base))
-        ax1.set_title(f"原始模型\n检测数量: {len(det_base)}", fontsize=12, fontweight="bold")
-        ax1.axis("off")
-
-        ax2.imshow(self.draw_detections(image, det_finetuned))
-        ax2.set_title(f"微调模型\n检测数量: {len(det_finetuned)}", fontsize=12, fontweight="bold")
-        ax2.axis("off")
+        self.draw_detections_on_axes(ax1, image, det_base, title=f"原始模型\n检测数量: {len(det_base)}")
+        self.draw_detections_on_axes(ax2, image, det_finetuned, title=f"微调模型\n检测数量: {len(det_finetuned)}")
 
         stats_text = "IOU统计:\n"
         stats_text += f"平均IOU: {iou_stats.get('mean_iou', 0):.3f}\n"
@@ -841,16 +872,13 @@ class ObjectDetectionPipeline:
         result["detections"] = detections
         result["num_detections"] = len(detections)
 
-        result_image = self.visualizer.draw_detections(original_image, detections)
-        result["result_image"] = result_image
-
         if output_path:
-            self.visualizer.save_result(result_image, output_path)
+            self.visualizer.save_result(plt_module, original_image, detections, output_path)
             result["output_path"] = output_path
 
         if display_result:
             if detections:
-                self.visualizer.display_result(plt_module, original_image, result_image, detections)
+                self.visualizer.display_result(plt_module, original_image, detections)
             else:
                 print("\n未检测到指定目标")
                 print(f"模型响应: {result.get('raw_response', '')}")
