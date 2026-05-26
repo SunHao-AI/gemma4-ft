@@ -2,7 +2,7 @@
 # Gemma4 E4B 模型专用配置
 # ============================================================================
 # 针对 Google Gemma4 E4B (Enhanced 4B) 视觉语言模型的微调配置
-# 
+#
 # 重要说明:
 # 1. Gemma4 的 box_2d 格式要求坐标为 [y1, x1, y2, x2] 顺序 (yxyx)
 # 2. 坐标归一化推荐使用 norm_1000 范围
@@ -16,8 +16,10 @@ model:
   name: "gemma4_e4b"
   family: "gemma"
   version: "E4B"
-  base_model_path: ""               # 基础模型路径，需在运行时指定
-                                    # 示例: "/path/to/gemma-4-E4B-it-unsloth-bnb-4bit"
+  base_model_path:
+    "/raid5/sh/model/unsloth/gemma-4-E4B-it-unsloth-bnb-4bit"
+    # 基础模型路径，需在运行时指定
+    # 示例: "/path/to/gemma-4-E4B-it-unsloth-bnb-4bit"
   description: "Google Gemma4 Enhanced 4B Vision-Language Model for Object Detection"
 
 # ----------------------------------------------------------------------------
@@ -27,31 +29,34 @@ data_preparation:
   # ============================================================================
   # 重要: Gemma4 要求的坐标格式
   # ============================================================================
-  coord_norm: "norm_1000"           # Gemma4 使用 [0, 1000] 归一化范围
-                                    # 这是 Gemma4 官方推荐的格式
-  
-  coord_format: "yxyx"              # Gemma4 专用格式: [y1, x1, y2, x2]
-                                    # 注意: 与传统 xyxy 格式不同！
-                                    # box_2d 输出顺序: y坐标在前
-  
-  output_format: "box_2d_json"      # JSON数组格式输出
-                                    # 格式: [{"box_2d": [y1,x1,y2,x2], "label": "..."}]
-  
+  coord_norm:
+    "norm_1000" # Gemma4 使用 [0, 1000] 归一化范围
+    # 这是 Gemma4 官方推荐的格式
+
+  coord_format:
+    "yxyx" # Gemma4 专用格式: [y1, x1, y2, x2]
+    # 注意: 与传统 xyxy 格式不同！
+    # box_2d 输出顺序: y坐标在前
+
+  output_format:
+    "box_2d_json" # JSON数组格式输出
+    # 格式: [{"box_2d": [y1,x1,y2,x2], "label": "..."}]
+
   prompt:
-    lang: "zh"                      # 默认使用中文Prompt
-    style: "descriptive"            # 描述性风格
-  
+    lang: "zh" # 默认使用中文Prompt
+    style: "descriptive" # 描述性风格
+
   split:
-    ratio: "8:1:1"                  # 标准划分比例
+    ratio: "8:1:1" # 标准划分比例
     method: "random"
-    seed: 42                        # 固定随机种子确保可复现
-  
+    seed: 42 # 固定随机种子确保可复现
+
   filter:
     class_whitelist: []
     class_blacklist: []
     class_remap: {}
     shape_types:
-      - "rectangle"                 # Gemma4 主要处理矩形标注
+      - "rectangle" # Gemma4 主要处理矩形标注
     min_bbox_size: 2
     keep_empty: false
 
@@ -59,18 +64,21 @@ data_preparation:
 # 模型加载配置 - Gemma4 E4B 规格
 # ----------------------------------------------------------------------------
 model_loading:
-  max_seq_length: 2048              # Gemma4 E4B 支持的序列长度
-                                    # 可选: 512/1024/2048/4096
-  
+  max_seq_length:
+    2048 # Gemma4 E4B 支持的序列长度
+    # 可选: 512/1024/2048/4096
+
   quantization:
-    load_in_4bit: true              # 推荐4-bit量化节省显存
-                                    # E4B模型约需 2.5GB 显存 (4-bit)
+    load_in_4bit:
+      true # 推荐4-bit量化节省显存
+      # E4B模型约需 2.5GB 显存 (4-bit)
     load_in_8bit: false
-  
+
   attention:
-    implementation: "sdpa"          # SDPA (Scaled Dot Product Attention)
-                                    # 推荐: 稳定性好，支持Vision
-  
+    implementation:
+      "sdpa" # SDPA (Scaled Dot Product Attention)
+      # 推荐: 稳定性好，支持Vision
+
   options:
     use_cache: true
     trust_remote_code: false
@@ -79,24 +87,25 @@ model_loading:
 # LoRA微调配置 - Gemma4 优化设置
 # ----------------------------------------------------------------------------
 lora:
-  r: 16                             # LoRA秩
-                                    # E4B模型推荐: 16-32
-                                    # 16: 平衡性能与资源
-                                    # 32: 更强表达能力
-  
-  alpha: 16                         # 缩放因子 (通常等于r)
-  dropout: 0                        # Unsloth 推荐 0
-  
-  target_modules:                   # Gemma4 LoRA目标模块
-    - "q_proj"                      # Query投影
-    - "k_proj"                      # Key投影
-    - "v_proj"                      # Value投影
-    - "o_proj"                      # Output投影
+  r:
+    16 # LoRA秩
+    # E4B模型推荐: 16-32
+    # 16: 平衡性能与资源
+    # 32: 更强表达能力
+
+  alpha: 16 # 缩放因子 (通常等于r)
+  dropout: 0 # Unsloth 推荐 0
+
+  target_modules: # Gemma4 LoRA目标模块
+    - "q_proj" # Query投影
+    - "k_proj" # Key投影
+    - "v_proj" # Value投影
+    - "o_proj" # Output投影
     # 可选扩展:
     # - "gate_proj"
     # - "up_proj"
     # - "down_proj"
-  
+
   bias: "none"
   use_rslora: false
 
@@ -104,47 +113,52 @@ lora:
 # 训练配置 - Gemma4 E4B 优化
 # ----------------------------------------------------------------------------
 training:
-  num_epochs: 1                     # 目标检测通常1-3轮足够
-  per_device_batch_size: 8          # 单GPU批次大小
-                                    # E4B (4-bit): 8-16 可行
-  gradient_accumulation_steps: 2    # 梯度累积
-                                    # 有效批次 = 8 * 2 * num_gpus
-  
-  learning_rate: 2e-5               # Gemma4 推荐学习率
-                                    # 范围: 1e-5 ~ 5e-5
-                                    # 过高可能导致过拟合
-  lr_scaling: "sqrt"                # 学习率缩放
-                                    # sqrt: 随GPU数量sqrt缩放
-  warmup_ratio: 0.1                 # 10% 步数预热
-  
+  num_epochs: 1 # 目标检测通常1-3轮足够
+  per_device_batch_size:
+    8 # 单GPU批次大小
+    # E4B (4-bit): 8-16 可行
+  gradient_accumulation_steps:
+    2 # 梯度累积
+    # 有效批次 = 8 * 2 * num_gpus
+
+  learning_rate:
+    2e-5 # Gemma4 推荐学习率
+    # 范围: 1e-5 ~ 5e-5
+    # 过高可能导致过拟合
+  lr_scaling:
+    "sqrt" # 学习率缩放
+    # sqrt: 随GPU数量sqrt缩放
+  warmup_ratio: 0.1 # 10% 步数预热
+
   optimizer:
-    type: "adamw_8bit"              # 8-bit优化器节省显存
+    type: "adamw_8bit" # 8-bit优化器节省显存
     weight_decay: 0.01
     max_grad_norm: 1.0
-  
+
   precision:
-    bf16: true                      # BF16 推荐用于现代GPU
-    fp16: false                     # FP16 可能不稳定
-    tf32: true                      # TF32 加速 (A100/H100)
-  
+    bf16: true # BF16 推荐用于现代GPU
+    fp16: false # FP16 可能不稳定
+    tf32: true # TF32 加速 (A100/H100)
+
   vision:
-    enabled: true                   # Gemma4 是Vision模型
-    image_width: 896                # 图像分辨率
-    image_height: 896               # 推荐: 896x896 或 1024x1024
-    image_load_mode: "lazy"         # 懒加载节省内存
+    enabled: true # Gemma4 是Vision模型
+    image_width: 896 # 图像分辨率
+    image_height: 896 # 推荐: 896x896 或 1024x1024
+    image_load_mode: "lazy" # 懒加载节省内存
 
 # ----------------------------------------------------------------------------
 # 分布式训练配置
 # ----------------------------------------------------------------------------
 distributed:
-  mode: "ddp"                       # DDP 简单高效
-                                    # 可选: "single"/"ddp"/"fsdp"
-  num_gpus: 8                       # GPU数量
-  
+  mode:
+    "ddp" # DDP 简单高效
+    # 可选: "single"/"ddp"/"fsdp"
+  num_gpus: 8 # GPU数量
+
   ddp:
     backend: "nccl"
-  
-  fsdp:                             # FSDP 配置（备用）
+
+  fsdp: # FSDP 配置（备用）
     sharding_strategy: "HYBRID_SHARD"
     auto_wrap_policy: "TRANSFORMER_BASED_WRAP"
     backward_prefetch: "BACKWARD_PRE"
@@ -155,10 +169,10 @@ distributed:
 # 数据加载配置
 # ----------------------------------------------------------------------------
 dataloader:
-  num_workers: 4                    # CPU 加载线程
-  prefetch_factor: 4                # 预取倍数
-  pin_memory: true                  # 固定内存加速传输
-  persistent_workers: true          # 保持worker存活
+  num_workers: 4 # CPU 加载线程
+  prefetch_factor: 4 # 预取倍数
+  pin_memory: true # 固定内存加速传输
+  persistent_workers: true # 保持worker存活
   drop_last: false
 
 # ----------------------------------------------------------------------------
@@ -169,7 +183,7 @@ output:
   save_strategy: "steps"
   save_steps: 500
   save_total_limit: 3
-  
+
   logging:
     log_level: "INFO"
     log_steps: 10
@@ -182,26 +196,28 @@ evaluation:
   eval_strategy: "steps"
   eval_steps: 100
   eval_on_start: false
-  
+
   metrics:
     - "loss"
-  
+
   post_training_eval:
-    auto_run: false                 # 训练后自动评估
+    auto_run: false # 训练后自动评估
     raise_on_error: false
 
 # ----------------------------------------------------------------------------
 # 推理配置 - Gemma4 目标检测
 # ----------------------------------------------------------------------------
 inference:
-  max_new_tokens: 128               # 检测结果token数
-                                    # 单目标约20 tokens
-                                    # 多目标需增加
-  temperature: 0.1                  # 低温度保证输出稳定
-                                    # 检测任务推荐: 0.0-0.2
+  max_new_tokens:
+    128 # 检测结果token数
+    # 单目标约20 tokens
+    # 多目标需增加
+  temperature:
+    0.1 # 低温度保证输出稳定
+    # 检测任务推荐: 0.0-0.2
   top_p: 0.9
   top_k: 50
-  do_sample: true                   # 采样模式
+  do_sample: true # 采样模式
 
 # ----------------------------------------------------------------------------
 # Gemma4 专用注记
@@ -212,7 +228,7 @@ notes:
     - y坐标在前 (y1, y2)
     - x坐标在后 (x1, x2)
     - 与传统 xyxy 格式不同，请注意数据准备时正确转换
-  
+
   recommended_settings: |
     推荐配置:
     - 单GPU训练: batch_size=4-8, grad_accum=4

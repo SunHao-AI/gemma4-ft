@@ -1543,7 +1543,7 @@ def parse_args():
     parser.add_argument("--scheduler_mode", choices=("static_partition", "dynamic_queue"), default="static_partition")
     parser.add_argument("--partition_strategy", choices=("contiguous", "round_robin"), default="round_robin")
     parser.add_argument("--queue_batch_size", type=int, default=None)
-    parser.add_argument("--coord_format", choices=("xyxy", "xywh", "cxcywh"), default="xyxy", help="输出bbox格式: xyxy, xywh, 或 cxcywh")
+    parser.add_argument("--coord_format", choices=("xyxy", "yxyx", "xywh", "cxcywh"), default="xyxy", help="输出bbox格式: xyxy, yxyx(Gemma4 box_2d), xywh, 或 cxcywh")
     parser.add_argument(
         "--attn_implementation", type=str, default=None, choices=["sdpa", "flash_attention_2", "eager"], help="注意力实现方式: sdpa(推荐), flash_attention_2, eager. None则由Unsloth自动选择"
     )
