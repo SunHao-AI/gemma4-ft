@@ -32,10 +32,21 @@ def configure_matplotlib_for_chinese(
     font_manager=None,
     warn: bool = False,
     auto_download: bool = True,
+    force_refresh: bool = True,
 ) -> Optional[str]:
-    from unsloth_finetune.tools.font_utils import get_chinese_font
+    from unsloth_finetune.tools.font_utils import (
+        get_chinese_font,
+        refresh_matplotlib_font_cache,
+        find_and_register_chinese_font,
+    )
+
+    if force_refresh:
+        refresh_matplotlib_font_cache()
 
     font_name = get_chinese_font(auto_install=True, auto_download=auto_download)
+
+    if not font_name:
+        font_name = find_and_register_chinese_font()
 
     if font_name:
         plt_module.rcParams["font.sans-serif"] = [font_name, "DejaVu Sans"]
@@ -636,7 +647,9 @@ class DetectionVisualizer:
             x1, y1, x2, y2 = bbox[0], bbox[1], bbox[2], bbox[3]
             color = self._get_color(index)
 
-            box_width_scaled = box_width * (img_width / 500)
+            scale_factor = min(img_width / 500, 2.0)
+            box_width_scaled = max(box_width * scale_factor, 1.0)
+            box_width_scaled = min(box_width_scaled, 4.0)
 
             rect = Rectangle(
                 (x1, y1),
@@ -657,15 +670,18 @@ class DetectionVisualizer:
             text_width_data = text_extents_data.width
             text_height_data = text_extents_data.height
 
+            label_x1 = x1
             label_y1 = y1 - text_height_data - 2
             if label_y1 < 0:
                 label_y1 = y1 + 2
-            label_y2 = label_y1 + text_height_data
 
-            text_bbox.set_position((x1 + 1, label_y1 + 0.5))
+            if label_x1 < 0:
+                label_x1 = 0
+
+            text_bbox.set_position((label_x1 + 1, label_y1 + 0.5))
 
             label_bg = Rectangle(
-                (x1, label_y1),
+                (label_x1, label_y1),
                 text_width_data + 2,
                 text_height_data + 1,
                 facecolor=color,
