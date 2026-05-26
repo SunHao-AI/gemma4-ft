@@ -146,6 +146,9 @@ class OutputConfig:
     log_level: str = "INFO"
     log_steps: int = 10
     report_to: str = "tensorboard"
+    lora_adapter_subdir: str = ""
+    lora_adapter_use_latest: bool = True
+    lora_adapter_timestamp: str = ""
 
 
 @dataclass
@@ -386,6 +389,7 @@ class TrainingConfigLoader:
     def _parse_output_config(self) -> None:
         cfg = self._raw_config.get("output", {})
         log_cfg = cfg.get("logging", {})
+        lora_cfg = cfg.get("lora_adapter", {})
 
         self.output = OutputConfig(
             base_dir=cfg.get("base_dir", "models/finetuned"),
@@ -395,6 +399,9 @@ class TrainingConfigLoader:
             log_level=log_cfg.get("log_level", "INFO"),
             log_steps=int(log_cfg.get("log_steps", 10)),
             report_to=log_cfg.get("report_to", "tensorboard"),
+            lora_adapter_subdir=lora_cfg.get("subdir", f"{self.model.name}_lora" if self.model.name else ""),
+            lora_adapter_use_latest=bool(lora_cfg.get("use_latest", True)),
+            lora_adapter_timestamp=lora_cfg.get("timestamp", ""),
         )
 
     def _parse_evaluation_config(self) -> None:
@@ -665,6 +672,11 @@ class TrainingConfigLoader:
                 "log_steps": self.output.log_steps,
                 "report_to": self.output.report_to,
             },
+            "lora_adapter": {
+                "subdir": self.output.lora_adapter_subdir,
+                "use_latest": self.output.lora_adapter_use_latest,
+                "timestamp": self.output.lora_adapter_timestamp,
+            },
         }
 
         result["evaluation"] = {
@@ -789,3 +801,96 @@ def print_config_summary(model_name: str) -> None:
 
 def list_available_configs() -> List[str]:
     return TrainingConfigLoader.get_available_configs()
+
+
+def get_lora_adapter_path(
+    config: TrainingConfigLoader,
+    project_root: Optional[Union[str, Path]] = None,
+    distributed_mode: Optional[str] = None,
+    timestamp: Optional[str] = None,
+    strict: bool = False,
+) -> str:
+    """
+    动态生成 LoRA adapter 的完整路径
+
+    Args:
+        config: 已加载的配置对象
+        project_root: 项目根目录（可选，默认使用当前工作目录）
+        distributed_mode: 分布式训练模式（可选，默认从配置读取）
+            - "ddp_{num_gpus}gpu" 格式，如 "ddp_8gpu"
+            - "single_gpu"
+        timestamp: 时间戳目录名（可选，默认自动获取）
+        strict: 是否严格模式，路径不存在时抛出异常
+
+    Returns:
+        LoRA adapter 的完整路径字符串
+
+    Raises:
+        FileNotFoundError: strict=True 且路径不存在时
+        ValueError: 配置缺失或无效时
+    """
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    if project_root is None:
+        project_root = Path.cwd()
+    else:
+        project_root = Path(project_root)
+
+    base_dir = config.output.base_dir
+    lora_subdir = config.output.lora_adapter_subdir
+
+    if not lora_subdir:
+        lora_subdir = f"{config.model.name}_lora"
+        logger.debug(f"LoRA adapter subdir 未配置，使用默认值: {lora_subdir}")
+
+    if distributed_mode is None:
+        dist_cfg = config.distributed
+        if dist_cfg.mode == "ddp":
+            distributed_mode = f"ddp_{dist_cfg.num_gpus}gpu"
+        elif dist_cfg.mode == "single":
+            distributed_mode = "single_gpu"
+        else:
+            distributed_mode = dist_cfg.mode
+
+    if timestamp is None:
+        timestamp = config.output.lora_adapter_timestamp
+        use_latest = config.output.lora_adapter_use_latest
+
+        if use_latest and not timestamp:
+            latest_file = project_root / base_dir / lora_subdir / distributed_mode / "latest.txt"
+
+            if latest_file.exists():
+                try:
+                    with open(latest_file, "r", encoding="utf-8") as f:
+                        timestamp = f.read().strip()
+                    logger.info(f"从 latest.txt 读取时间戳: {timestamp}")
+                except Exception as e:
+                    logger.warning(f"读取 latest.txt 失败: {e}")
+                    if strict:
+                        raise FileNotFoundError(f"无法读取 latest.txt: {latest_file}")
+            else:
+                logger.warning(f"latest.txt 不存在: {latest_file}")
+                if strict:
+                    raise FileNotFoundError(f"latest.txt 不存在: {latest_file}")
+
+    if not timestamp:
+        msg = f"未找到有效的时间戳 (lora_adapter_timestamp 或 latest.txt)"
+        logger.warning(msg)
+        if strict:
+            raise ValueError(msg)
+        timestamp = ""
+
+    lora_path_parts = [base_dir, lora_subdir, distributed_mode]
+    if timestamp:
+        lora_path_parts.append(timestamp)
+
+    lora_adapter_path = project_root / Path(*lora_path_parts)
+
+    if strict and not lora_adapter_path.exists():
+        raise FileNotFoundError(f"LoRA adapter 路径不存在: {lora_adapter_path}")
+
+    logger.info(f"生成 LoRA adapter 路径: {lora_adapter_path}")
+
+    return str(lora_adapter_path)

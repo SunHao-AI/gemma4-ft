@@ -18,4 +18,4 @@ flash_attention_env_report.json
 .claude/
 data/*
 models/*
-*_logs/*
+gpu_logs/*
