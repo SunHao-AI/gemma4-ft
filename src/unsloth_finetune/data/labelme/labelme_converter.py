@@ -462,6 +462,8 @@ class LabelMeConverter:
         """将归一化后的 xyxy bbox 转换为目标坐标格式"""
         if self.coord_format == CoordFormat.XYXY:
             return [bbox.x_min, bbox.y_min, bbox.x_max, bbox.y_max]
+        elif self.coord_format == CoordFormat.YXYX:
+            return [bbox.y_min, bbox.x_min, bbox.y_max, bbox.x_max]
         elif self.coord_format == CoordFormat.XYWH:
             return [bbox.x_min, bbox.y_min, bbox.x_max - bbox.x_min, bbox.y_max - bbox.y_min]
         elif self.coord_format == CoordFormat.CXCYWH:

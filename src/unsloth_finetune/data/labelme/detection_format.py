@@ -54,13 +54,21 @@ def convert_xyxy_to_format(
 
     Args:
         x1, y1, x2, y2: pixel coordinates in xyxy format
-        coord_format: "xyxy", "xywh", or "cxcywh"
+        coord_format: "xyxy", "yxyx", "xywh", or "cxcywh"
 
     Returns:
         List of 4 floats in the requested format.
+
+    Note:
+        - xyxy: [x_min, y_min, x_max, y_max] (standard CV format)
+        - yxyx: [y_min, x_min, y_max, x_max] (Gemma4 box_2d format)
+        - xywh: [x, y, width, height] (YOLO format)
+        - cxcywh: [center_x, center_y, width, height] (COCO format)
     """
     if coord_format == "xyxy":
         return [x1, y1, x2, y2]
+    elif coord_format == "yxyx":
+        return [y1, x1, y2, x2]
     elif coord_format == "xywh":
         return [x1, y1, x2 - x1, y2 - y1]
     elif coord_format == "cxcywh":
@@ -68,7 +76,7 @@ def convert_xyxy_to_format(
         cy = (y1 + y2) / 2
         return [cx, cy, x2 - x1, y2 - y1]
     else:
-        raise ValueError(f"Unknown coord_format: {coord_format}. Must be xyxy, xywh, or cxcywh.")
+        raise ValueError(f"Unknown coord_format: {coord_format}. Must be xyxy, yxyx, xywh, or cxcywh.")
 
 
 class GenStrategy(str, Enum):
@@ -174,9 +182,11 @@ _BUILTIN_RESPONSE_TEMPLATES: Dict[Tuple[str, str], str] = {
 # Coordinate format description templates keyed by (lang, coord_format)
 _COORD_FORMAT_DESCRIPTIONS: Dict[Tuple[str, str], str] = {
     ("en", "xyxy"): "[x_min, y_min, x_max, y_max]",
+    ("en", "yxyx"): "[y_min, x_min, y_max, x_max]",
     ("en", "xywh"): "[x, y, width, height]",
     ("en", "cxcywh"): "[center_x, center_y, width, height]",
     ("zh", "xyxy"): "[x_min, y_min, x_max, y_max]",
+    ("zh", "yxyx"): "[y_min, x_min, y_max, x_max]",
     ("zh", "xywh"): "[x, y, 宽, 高]",
     ("zh", "cxcywh"): "[中心x, 中心y, 宽, 高]",
 }
@@ -320,9 +330,10 @@ def _transform_and_format_coords(
     """Transform coordinates to target format and norm, then format as string."""
     x_min, y_min, x_max, y_max = bbox["x_min"], bbox["y_min"], bbox["x_max"], bbox["y_max"]
 
-    # Transform to target format
     if coord_format == "xyxy":
         coords = [x_min, y_min, x_max, y_max]
+    elif coord_format == "yxyx":
+        coords = [y_min, x_min, y_max, x_max]
     elif coord_format == "xywh":
         coords = [x_min, y_min, x_max - x_min, y_max - y_min]
     elif coord_format == "cxcywh":
@@ -332,8 +343,6 @@ def _transform_and_format_coords(
     else:
         coords = [x_min, y_min, x_max, y_max]
 
-    # Coordinates are already normalized by _normalize_bbox() before reaching here.
-    # Only format them for display; do NOT apply additional scaling.
     if coord_norm == "raw":
         return "[" + ", ".join(str(int(round(c))) for c in coords) + "]"
     elif coord_norm == "norm_1":
@@ -360,6 +369,8 @@ def _build_box_2d_json_response(
 
         if coord_format == "xyxy":
             raw_coords = [x_min, y_min, x_max, y_max]
+        elif coord_format == "yxyx":
+            raw_coords = [y_min, x_min, y_max, x_max]
         elif coord_format == "xywh":
             raw_coords = [x_min, y_min, x_max - x_min, y_max - y_min]
         elif coord_format == "cxcywh":
@@ -367,8 +378,6 @@ def _build_box_2d_json_response(
         else:
             raw_coords = [x_min, y_min, x_max, y_max]
 
-        # Coordinates are already normalized by _normalize_bbox() before reaching here.
-        # Only format them for display; do NOT apply additional scaling.
         if coord_norm == "raw":
             scaled_coords = [int(round(c)) for c in raw_coords]
         elif coord_norm == "norm_1":
@@ -382,7 +391,6 @@ def _build_box_2d_json_response(
             "box_2d": scaled_coords,
             "label": bbox["label"],
         }
-        # Include coordinate format info in first detection's metadata
         if not detections:
             detection["coord_format"] = coord_format
             detection["coord_norm"] = coord_norm
