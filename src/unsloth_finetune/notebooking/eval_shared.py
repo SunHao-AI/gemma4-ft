@@ -653,11 +653,12 @@ class MetricsVisualizer:
 
     @staticmethod
     def _ensure_chinese_font(plt_module) -> dict:
-        font_family = plt_module.rcParams.get("font.sans-serif", ["DejaVu Sans"])
+        font_family = plt_module.rcParams.get("font.sans-serif", ["sans-serif"])
         if isinstance(font_family, list):
-            font_name = font_family[0] if font_family else "DejaVu Sans"
+            font_name = font_family[0] if font_family else "sans-serif"
         else:
-            font_name = font_family
+            font_name = str(font_family)
+        font_name = font_name if font_name and font_name != "Arial" else "sans-serif"
         return {"fontname": font_name, "fontsize": 12}
 
     @staticmethod

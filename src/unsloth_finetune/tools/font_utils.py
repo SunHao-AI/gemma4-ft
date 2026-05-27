@@ -21,10 +21,8 @@ import matplotlib.font_manager as fm
 _FONT_CACHE_DIR = Path.home() / ".cache" / "unsloth_fonts"
 
 _NOTO_SANS_SC_URLS = [
-    "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/SimplifiedChinese/"
-    "NotoSansCJKsc-Regular.otf",
-    "https://cdn.jsdelivr.net/gh/googlefonts/noto-cjk@main/Sans/OTF/SimplifiedChinese/"
-    "NotoSansCJKsc-Regular.otf",
+    "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/SimplifiedChinese/" "NotoSansCJKsc-Regular.otf",
+    "https://cdn.jsdelivr.net/gh/googlefonts/noto-cjk@main/Sans/OTF/SimplifiedChinese/" "NotoSansCJKsc-Regular.otf",
 ]
 _NOTO_SANS_SC_FILE = "NotoSansCJKsc-Regular.otf"
 
@@ -145,11 +143,7 @@ def install_chinese_font() -> Tuple[bool, str]:
             except subprocess.CalledProcessError as e:
                 error_msg = e.stderr.decode() if e.stderr else str(e)
                 if "Permission denied" in error_msg or "not root" in error_msg.lower():
-                    hint = (
-                        f"需要 root 权限安装字体，请使用 sudo 运行此脚本"
-                        f"或手动执行:\n  sudo {cmd_info['install'][0]}"
-                        f" install {cmd_info['install'][-1]}"
-                    )
+                    hint = f"需要 root 权限安装字体，请使用 sudo 运行此脚本" f"或手动执行:\n  sudo {cmd_info['install'][0]}" f" install {cmd_info['install'][-1]}"
                     return False, hint
                 return False, f"安装失败: {error_msg}"
             except subprocess.TimeoutExpired:
@@ -164,10 +158,7 @@ def install_chinese_font() -> Tuple[bool, str]:
                 "linux_alpine": "apk add font-wqy-microhei",
                 "linux_generic": "请根据您的 Linux 发行版安装中文字体包",
             }
-            manual_hint = (
-                f"未检测到支持的包管理器，请手动安装:\n"
-                f"  {manual_cmds.get(os_type, manual_cmds['linux_generic'])}"
-            )
+            manual_hint = f"未检测到支持的包管理器，请手动安装:\n" f"  {manual_cmds.get(os_type, manual_cmds['linux_generic'])}"
             return False, manual_hint
 
     return False, "未知操作系统，请手动安装中文字体"
@@ -195,15 +186,17 @@ def get_system_font_dirs() -> list:
         ]
     elif system == "Windows":
         font_dirs = [
-            os.path.join(
-                os.environ.get("SystemRoot", "C:\\Windows"), "Fonts"
+            os.path.join(os.environ.get("SystemRoot", "C:\\Windows"), "Fonts"),
+            (
+                os.path.join(
+                    os.environ.get("LOCALAPPDATA", ""),
+                    "Microsoft",
+                    "Windows",
+                    "Fonts",
+                )
+                if os.environ.get("LOCALAPPDATA")
+                else None
             ),
-            os.path.join(
-                os.environ.get("LOCALAPPDATA", ""),
-                "Microsoft",
-                "Windows",
-                "Fonts",
-            ) if os.environ.get("LOCALAPPDATA") else None,
         ]
         font_dirs = [d for d in font_dirs if d]
 
@@ -212,11 +205,20 @@ def get_system_font_dirs() -> list:
 
 def scan_chinese_font_files() -> list:
     chinese_font_patterns = [
-        "wqy-microhei", "wqy-zenhei", "WenQuanYi",
-        "NotoSansCJK", "NotoSansSC", "SourceHanSans",
-        "SimHei", "msyh", "MicrosoftYaHei",
-        "PingFang", "Heiti", "STHeiti",
-        "Hiragino", "ArialUnicode",
+        "wqy-microhei",
+        "wqy-zenhei",
+        "WenQuanYi",
+        "NotoSansCJK",
+        "NotoSansSC",
+        "SourceHanSans",
+        "SimHei",
+        "msyh",
+        "MicrosoftYaHei",
+        "PingFang",
+        "Heiti",
+        "STHeiti",
+        "Hiragino",
+        "ArialUnicode",
     ]
 
     font_extensions = [".ttf", ".ttc", ".otf", ".TTF", ".TTC", ".OTF"]
@@ -285,6 +287,7 @@ def refresh_matplotlib_font_cache():
             cache_dir = str(fm.cachedir)
         else:
             import matplotlib
+
             cache_dir = os.path.join(matplotlib.get_data_path(), ".cache")
 
         if cache_dir and os.path.exists(cache_dir):
@@ -299,6 +302,7 @@ def refresh_matplotlib_font_cache():
     try:
         if hasattr(fm, "_load_fontmanager"):
             import inspect
+
             sig = inspect.signature(fm._load_fontmanager)
             if "try_read_cache" in sig.parameters:
                 fm._load_fontmanager(try_read_cache=False)
@@ -312,6 +316,29 @@ def refresh_matplotlib_font_cache():
     except Exception as e:
         print(f"刷新字体管理器失败: {e}")
         fm.fontManager = fm.FontManager()
+
+
+def force_chinese_font_after_style(plt_module, font_name: Optional[str] = None) -> None:
+    """在应用 matplotlib 样式后强制重新设置中文字体，避免样式覆盖字体配置。
+
+    Args:
+        plt_module: matplotlib.pyplot 模块
+        font_name: 中文字体名称，如果未提供则自动检测
+    """
+    if font_name is None:
+        font_name = get_chinese_font(auto_install=False, auto_download=False)
+
+    if font_name:
+        plt_module.rcParams["font.sans-serif"] = [font_name, "DejaVu Sans", "sans-serif"]
+        plt_module.rcParams["font.family"] = "sans-serif"
+        plt_module.rcParams["axes.unicode_minus"] = False
+        try:
+            fm._load_fontmanager(try_read_cache=False)
+        except Exception:
+            pass
+    else:
+        plt_module.rcParams["font.sans-serif"] = ["DejaVu Sans", "sans-serif"]
+        plt_module.rcParams["font.family"] = "sans-serif"
 
 
 def _validate_font_file(path: Path) -> bool:
@@ -329,6 +356,7 @@ def _download_font(url: str, dest: Path, timeout: int = 30) -> bool:
     try:
         dest.parent.mkdir(parents=True, exist_ok=True)
         import requests
+
         resp = requests.get(url, timeout=timeout, stream=True)
         if resp.status_code != 200:
             return False
@@ -441,14 +469,18 @@ def setup_chinese_font(auto_install: bool = True, auto_download: bool = True) ->
 
     if font_name:
         print(f"使用中文字体: {font_name}")
-        plt.rcParams["font.sans-serif"] = [font_name]
+        plt.rcParams["font.sans-serif"] = [font_name, "DejaVu Sans", "sans-serif"]
+        plt.rcParams["font.family"] = "sans-serif"
         plt.rcParams["axes.unicode_minus"] = False
     else:
         print("警告: 无法使用中文字体，图表将使用英文标签")
-        plt.rcParams["font.family"] = "DejaVu Sans"
+        plt.rcParams["font.sans-serif"] = ["DejaVu Sans", "sans-serif"]
+        plt.rcParams["font.family"] = "sans-serif"
 
     plt.rcParams["figure.figsize"] = (12, 8)
     plt.rcParams["figure.dpi"] = 100
+
+    fm._load_fontmanager(try_read_cache=False)
 
     return font_name
 
