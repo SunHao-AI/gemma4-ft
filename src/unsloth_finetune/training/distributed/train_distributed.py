@@ -43,21 +43,18 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True,max_s
 
 
 def _early_setup_gpu_groups():
-    """在导入 Unsloth 之前根据环境变量设置进程级 CUDA_VISIBLE_DEVICES
+    """检测 GPU 组配置并返回映射信息
 
-    这是关键步骤：Unsloth 在导入时会缓存 GPU 信息，必须在导入前设置。
+    注意：由于 NCCL 与进程级 CUDA_VISIBLE_DEVICES 不兼容，
+    此函数不再修改 CUDA_VISIBLE_DEVICES，只返回映射信息用于：
+    1. 控制 max_memory 配置（限制模型只在特定 GPU 上加载）
+    2. 在 setup_distributed() 中使用逻辑 GPU 0
 
     环境变量:
         LOCAL_RANK: torchrun 设置的进程本地 rank
         GPU_GROUPS_JSON: GPU 分组配置 (JSON 格式)
 
     使用方式:
-        # 方式1: 通过环境变量传递
-        export GPU_GROUPS_JSON='[[0,1],[2,3],[6,7]]'
-        CUDA_VISIBLE_DEVICES=0,1,2,3,6,7 torchrun --nproc_per_node=3 train_distributed.py \
-            --gpu_groups '[[0,1],[2,3],[6,7]]' --device_map balanced ...
-
-        # 方式2: 自动从命令行参数提取 (需要解析部分参数)
         torchrun --nproc_per_node=3 train_distributed.py \
             --gpu_groups '[[0,1],[2,3],[6,7]]' --device_map balanced ...
     """
@@ -85,8 +82,6 @@ def _early_setup_gpu_groups():
         return None
 
     group = gpu_groups[local_rank]
-    cuda_devices = ",".join(str(g) for g in group)
-    os.environ["CUDA_VISIBLE_DEVICES"] = cuda_devices
 
     return (group, list(range(len(group))))
 
@@ -538,12 +533,13 @@ def setup_distributed():
     if is_distributed:
         dist.init_process_group(backend="nccl")
 
-        visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
         is_gpu_group_mode = _EARLY_GPU_MAPPING is not None
 
         if is_gpu_group_mode:
-            torch.cuda.set_device(0)
-            logger.info(f"GPU组模式: local_rank={local_rank}, 设置逻辑GPU 0 (CUDA_VISIBLE_DEVICES={visible_devices})")
+            group = _EARLY_GPU_MAPPING[0]
+            primary_gpu = group[0]
+            torch.cuda.set_device(primary_gpu)
+            logger.info(f"GPU组模式: local_rank={local_rank}, 主GPU={primary_gpu}, GPU组={group}")
         else:
             torch.cuda.set_device(local_rank)
 
@@ -554,12 +550,12 @@ def setup_distributed():
         if rank == 0:
             logger.info("分布式训练初始化完成")
             logger.info(f"  Rank: {rank}, Local Rank: {local_rank}, World Size: {world_size}")
-            logger.info(f"  CUDA_VISIBLE_DEVICES: {visible_devices}")
+            logger.info(f"  GPU组模式: {is_gpu_group_mode}")
 
-            visible_count = torch.cuda.device_count()
-            for i in range(visible_count):
+            device_count = torch.cuda.device_count()
+            for i in range(device_count):
                 props = torch.cuda.get_device_properties(i)
-                logger.info(f"  逻辑GPU {i}: {props.name}, {props.total_memory / 1024**3:.1f}GB")
+                logger.info(f"  GPU {i}: {props.name}, {props.total_memory / 1024**3:.1f}GB")
 
     return local_rank, world_size, is_distributed
 

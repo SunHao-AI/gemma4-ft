@@ -376,21 +376,25 @@ class DistributedConfig:
 
             if self.gpu_groups is not None:
                 group = self.gpu_groups[local_rank]
-                group_device_map = {}
-                if self.device_map_strategy and self.device_map_strategy != DeviceMapStrategy.CUSTOM.value:
-                    group_device_map = self.device_map_strategy
-                else:
-                    group_device_map = DeviceMapStrategy.BALANCED.value
 
-                max_mem = self.max_memory_per_gpu
-                if max_mem is None:
-                    max_mem = {}
-                    for gid in group:
-                        props = torch.cuda.get_device_properties(gid)
-                        max_mem[gid] = f"{int(props.total_memory / 1024**3 * 0.85)}GiB"
+                strategy = self.device_map_strategy
+                if strategy is None or strategy == DeviceMapStrategy.CUSTOM.value:
+                    strategy = DeviceMapStrategy.BALANCED.value
+
+                total_gpus = torch.cuda.device_count()
+                max_mem = {}
+                for gid in range(total_gpus):
+                    if gid in group:
+                        if self.max_memory_per_gpu is not None and gid in self.max_memory_per_gpu:
+                            max_mem[gid] = self.max_memory_per_gpu[gid]
+                        else:
+                            props = torch.cuda.get_device_properties(gid)
+                            max_mem[gid] = f"{int(props.total_memory / 1024**3 * 0.85)}GiB"
+                    else:
+                        max_mem[gid] = "0MiB"
 
                 return {
-                    "strategy": group_device_map,
+                    "strategy": strategy,
                     "gpu_group": group,
                     "max_memory": max_mem,
                 }
