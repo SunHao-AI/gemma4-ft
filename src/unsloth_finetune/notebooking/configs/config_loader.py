@@ -116,8 +116,6 @@ class DistributedConfig:
 
     mode: str = "ddp"
     num_gpus: int = 8
-    tp_size: int = 4
-    dp_shard_size: int = 1
     ddp_backend: str = "nccl"
     fsdp_sharding_strategy: str = "FULL_SHARD"
     fsdp_auto_wrap_policy: str = "TRANSFORMER_BASED_WRAP"
@@ -183,7 +181,7 @@ VALID_PROMPT_LANGS: Set[str] = {"en", "zh"}
 VALID_PROMPT_STYLES: Set[str] = {"simple", "descriptive", "cot"}
 VALID_SPLIT_METHODS: Set[str] = {"random", "sequential", "stratified"}
 VALID_ATTENTION_IMPLS: Set[str] = {"sdpa", "flash_attention_2", "eager"}
-VALID_DISTRIBUTED_MODES: Set[str] = {"single", "ddp", "fsdp", "device_map", "nd_parallel", "auto", "multi_node", "compare"}
+VALID_DISTRIBUTED_MODES: Set[str] = {"single", "ddp", "fsdp", "device_map", "auto", "multi_node", "compare"}
 VALID_LR_SCALINGS: Set[str] = {"none", "linear", "sqrt"}
 VALID_IMAGE_LOAD_MODES: Set[str] = {"lazy", "preload"}
 
@@ -365,13 +363,10 @@ class TrainingConfigLoader:
         cfg = self._raw_config.get("distributed", {})
         ddp_cfg = cfg.get("ddp", {})
         fsdp_cfg = cfg.get("fsdp", {})
-        nd_parallel_cfg = cfg.get("nd_parallel", {})
 
         self.distributed = DistributedConfig(
             mode=cfg.get("mode", "ddp"),
             num_gpus=int(cfg.get("num_gpus", 8)),
-            tp_size=int(nd_parallel_cfg.get("tp_size", cfg.get("tp_size", 4))),
-            dp_shard_size=int(nd_parallel_cfg.get("dp_shard_size", cfg.get("dp_shard_size", 1))),
             ddp_backend=ddp_cfg.get("backend", "nccl"),
             fsdp_sharding_strategy=fsdp_cfg.get("sharding_strategy", "FULL_SHARD"),
             fsdp_auto_wrap_policy=fsdp_cfg.get("auto_wrap_policy", "TRANSFORMER_BASED_WRAP"),
@@ -647,8 +642,6 @@ class TrainingConfigLoader:
         result["distributed"] = {
             "mode": self.distributed.mode,
             "num_gpus": self.distributed.num_gpus,
-            "tp_size": self.distributed.tp_size,
-            "dp_shard_size": self.distributed.dp_shard_size,
             "ddp": {
                 "backend": self.distributed.ddp_backend,
             },
@@ -658,10 +651,6 @@ class TrainingConfigLoader:
                 "backward_prefetch": self.distributed.fsdp_backward_prefetch,
                 "cpu_offload": self.distributed.fsdp_cpu_offload,
                 "min_num_params": self.distributed.fsdp_min_num_params,
-            },
-            "nd_parallel": {
-                "tp_size": self.distributed.tp_size,
-                "dp_shard_size": self.distributed.dp_shard_size,
             },
         }
 
