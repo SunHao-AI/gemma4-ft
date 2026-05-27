@@ -679,10 +679,17 @@ def validate_training_configuration(config, effective_lr: float, world_size: int
 def setup_gpu_group_visibility(config, local_rank: int) -> tuple[int, int] | None:
     """确认 GPU 组隔离状态并返回映射信息
 
-    注意：CUDA_VISIBLE_DEVICES 已在脚本开头（导入 Unsloth 之前）设置。
-    此函数主要用于：
-    1. 确认 GPU 组隔离已生效
-    2. 将映射信息传递给 DistributedConfig 用于 max_memory 重映射
+    此函数用于：
+    1. 确认 GPU 组隔离状态（是否通过 CUDA_VISIBLE_DEVICES 隔离）
+    2. 将映射信息传递给 DistributedConfig 用于 max_memory 处理
+
+    当 CUDA_VISIBLE_DEVICES 未设置（NCCL分布式模式）：
+      - max_memory 使用物理GPU ID，包含组外GPU的 0MiB 条目
+      - 返回映射信息但不会用于重映射
+
+    当 CUDA_VISIBLE_DEVICES 已设置（notebook模式）：
+      - max_memory 需要重映射为逻辑GPU ID
+      - 返回映射信息用于物理→逻辑ID转换
 
     Args:
         config: DistributedConfig 实例
@@ -703,11 +710,16 @@ def setup_gpu_group_visibility(config, local_rank: int) -> tuple[int, int] | Non
         return None
 
     current_cuda_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
-    logger.info(f"GPU组隔离: local_rank={local_rank}, CUDA_VISIBLE_DEVICES={current_cuda_devices}")
+    is_isolated = current_cuda_devices != "" and "," in current_cuda_devices
+
+    if is_isolated:
+        logger.info(f"GPU组隔离模式: local_rank={local_rank}, CUDA_VISIBLE_DEVICES={current_cuda_devices}, max_memory将使用逻辑GPU ID")
+    else:
+        logger.info(f"GPU组NCCL模式: local_rank={local_rank}, CUDA_VISIBLE_DEVICES={current_cuda_devices or '(未设置)'}, max_memory将使用物理GPU ID (含0MiB限制)")
 
     if _EARLY_GPU_MAPPING is not None:
         original_group, remapped_group = _EARLY_GPU_MAPPING
-        logger.info(f"GPU映射: 原始={original_group} -> 逻辑={remapped_group}")
+        logger.info(f"GPU映射: 物理组={original_group}, 逻辑组={remapped_group}")
         return (original_group, remapped_group)
 
     group = config.gpu_groups[local_rank]
@@ -746,14 +758,14 @@ def main():
     model_kwargs = config.get_model_kwargs()
     timings: dict[str, float] = {}
 
+    dm = model_kwargs.get("device_map")
+    mm = model_kwargs.get("max_memory")
+    dm_desc = str(dm) if dm is not None else "None (每进程独立GPU)"
+    mm_desc = str(mm) if mm is not None else "None"
+    logger.info(f"[rank={local_rank}] 加载模型参数: device_map={dm_desc}, max_memory={mm_desc}")
+
     if is_main_process():
         logger.info("正在加载模型...")
-        dm = model_kwargs.get("device_map")
-        mm = model_kwargs.get("max_memory")
-        dm_desc = str(dm) if dm is not None else "None (每进程独立GPU)"
-        mm_desc = str(mm) if mm is not None else "None"
-        logger.info(f"device_map: {dm_desc}")
-        logger.info(f"max_memory: {mm_desc}")
 
     model_load_start = time.perf_counter()
     model, processor = FastVisionModel.from_pretrained(**model_kwargs)
@@ -766,9 +778,18 @@ def main():
 
     if is_main_process():
         logger.info(f"模型加载完成，参数量: {model.num_parameters() / 1e9:.2f}B")
-        # 确认注意力实现: 检查模型config的_attn_implementation字段
         _resolved_attn = getattr(model.config, "_attn_implementation", None) or getattr(model.config, "attn_implementation", None)
         logger.info(f"注意力实现: config={_resolved_attn}, requested={config.attn_implementation}")
+
+    hf_device_map = getattr(model, "hf_device_map", None)
+    if hf_device_map is not None:
+        gpu_usage = {}
+        for layer, gpu_id in hf_device_map.items():
+            gpu_usage.setdefault(gpu_id, []).append(layer)
+        logger.info(f"[rank={local_rank}] 实际device_map: {len(hf_device_map)}层分布到 {len(gpu_usage)} 个设备: {dict((k, len(v)) for k, v in gpu_usage.items())}")
+    else:
+        current_dev = torch.cuda.current_device()
+        logger.info(f"[rank={local_rank}] 无hf_device_map, 模型在当前设备: cuda:{current_dev}")
 
     if is_main_process():
         logger.info("正在配置LoRA...")
