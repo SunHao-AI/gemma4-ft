@@ -16,6 +16,6 @@ unsloth_compiled_cache/
 results/
 flash_attention_env_report.json
 .claude/
-data/*
-models/*
-gpu_logs/*
+data/
+models/
+gpu_logs/
