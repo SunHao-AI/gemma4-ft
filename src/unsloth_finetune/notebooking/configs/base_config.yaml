@@ -95,19 +95,16 @@ model_loading:
 # LoRA微调配置
 # ----------------------------------------------------------------------------
 lora:
-  r:
-    32 # LoRA秩（低秩矩阵维度）
-    # 取值范围: 4-64，常见: 8/16/32
-    # 较大值增加表达能力但消耗更多资源
+  r: 32 # LoRA秩（低秩矩阵维度）
+  # 取值范围: 4-64，常见: 8/16/32
+  # 较大值增加表达能力但消耗更多资源
 
-  alpha:
-    32 # LoRA缩放因子
-    # 通常设置为与r相同的值
-    # scaling = alpha / r
+  alpha: 32 # LoRA缩放因子
+  # 通常设置为与r相同的值
+  # scaling = alpha / r
 
-  dropout:
-    0 # LoRA Dropout率
-    # Unsloth推荐设置为0
+  dropout: 0 # LoRA Dropout率
+  # Unsloth推荐设置为0
 
   target_modules: # LoRA应用的目标模块
     - "q_proj"
@@ -131,12 +128,10 @@ training:
   gradient_accumulation_steps: 2 # 梯度累积步数
 
   # 学习率配置
-  learning_rate:
-    2e-5 # 基础学习率
-    # 取值范围: 1e-6 ~ 1e-4
-  lr_scaling:
-    "sqrt" # 学习率缩放策略
-    # 可选: "none"/"linear"/"sqrt"
+  learning_rate: 2e-5 # 基础学习率
+  # 取值范围: 1e-6 ~ 1e-4
+  lr_scaling: "sqrt" # 学习率缩放策略
+  # 可选: "none"/"linear"/"sqrt"
   warmup_ratio: 0.1 # 预热比例（占总训练步数）
 
   # 优化器配置

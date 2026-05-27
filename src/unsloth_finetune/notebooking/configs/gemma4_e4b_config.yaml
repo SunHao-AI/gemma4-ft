@@ -16,10 +16,9 @@ model:
   name: "gemma4_e4b"
   family: "gemma"
   version: "E4B"
-  base_model_path:
-    "/raid5/sh/model/unsloth/gemma-4-E4B-it-unsloth-bnb-4bit"
-    # 基础模型路径，需在运行时指定
-    # 示例: "/path/to/gemma-4-E4B-it-unsloth-bnb-4bit"
+  base_model_path: "/raid5/sh/model/unsloth/gemma-4-E4B-it-unsloth-bnb-4bit"
+  # 基础模型路径，需在运行时指定
+  # 示例: "/path/to/gemma-4-E4B-it-unsloth-bnb-4bit"
   description: "Google Gemma4 Enhanced 4B Vision-Language Model for Object Detection"
 
 # ----------------------------------------------------------------------------
@@ -29,18 +28,15 @@ data_preparation:
   # ============================================================================
   # 重要: Gemma4 要求的坐标格式
   # ============================================================================
-  coord_norm:
-    "norm_1000" # Gemma4 使用 [0, 1000] 归一化范围
-    # 这是 Gemma4 官方推荐的格式
+  coord_norm: "norm_1000" # Gemma4 使用 [0, 1000] 归一化范围
+  # 这是 Gemma4 官方推荐的格式
 
-  coord_format:
-    "yxyx" # Gemma4 专用格式: [y1, x1, y2, x2]
-    # 注意: 与传统 xyxy 格式不同！
-    # box_2d 输出顺序: y坐标在前
+  coord_format: "yxyx" # Gemma4 专用格式: [y1, x1, y2, x2]
+  # 注意: 与传统 xyxy 格式不同！
+  # box_2d 输出顺序: y坐标在前
 
-  output_format:
-    "box_2d_json" # JSON数组格式输出
-    # 格式: [{"box_2d": [y1,x1,y2,x2], "label": "..."}]
+  output_format: "box_2d_json" # JSON数组格式输出
+  # 格式: [{"box_2d": [y1,x1,y2,x2], "label": "..."}]
 
   prompt:
     lang: "zh" # 默认使用中文Prompt
@@ -64,20 +60,17 @@ data_preparation:
 # 模型加载配置 - Gemma4 E4B 规格
 # ----------------------------------------------------------------------------
 model_loading:
-  max_seq_length:
-    2048 # Gemma4 E4B 支持的序列长度
-    # 可选: 512/1024/2048/4096
+  max_seq_length: 2048 # Gemma4 E4B 支持的序列长度
+  # 可选: 512/1024/2048/4096
 
   quantization:
-    load_in_4bit:
-      true # 推荐4-bit量化节省显存
-      # E4B模型约需 2.5GB 显存 (4-bit)
+    load_in_4bit: true # 推荐4-bit量化节省显存
+    # E4B模型约需 2.5GB 显存 (4-bit)
     load_in_8bit: false
 
   attention:
-    implementation:
-      "sdpa" # SDPA (Scaled Dot Product Attention)
-      # 推荐: 稳定性好，支持Vision
+    implementation: "sdpa" # SDPA (Scaled Dot Product Attention)
+    # 推荐: 稳定性好，支持Vision
 
   options:
     use_cache: true
@@ -87,11 +80,10 @@ model_loading:
 # LoRA微调配置 - Gemma4 优化设置
 # ----------------------------------------------------------------------------
 lora:
-  r:
-    32 # LoRA秩
-    # E4B模型推荐: 16-32
-    # 16: 平衡性能与资源
-    # 32: 更强表达能力
+  r: 32 # LoRA秩
+  # E4B模型推荐: 16-32
+  # 16: 平衡性能与资源
+  # 32: 更强表达能力
 
   alpha: 32 # 缩放因子 (通常等于r)
   dropout: 0 # Unsloth 推荐 0
@@ -113,20 +105,16 @@ lora:
 # ----------------------------------------------------------------------------
 training:
   num_epochs: 1 # 目标检测通常1-3轮足够
-  per_device_batch_size:
-    8 # 单GPU批次大小
-    # E4B (4-bit): 8-16 可行
-  gradient_accumulation_steps:
-    2 # 梯度累积
-    # 有效批次 = 8 * 2 * num_gpus
+  per_device_batch_size: 8 # 单GPU批次大小
+  # E4B (4-bit): 8-16 可行
+  gradient_accumulation_steps: 2 # 梯度累积
+  # 有效批次 = 8 * 2 * num_gpus
 
-  learning_rate:
-    2e-5 # Gemma4 推荐学习率
-    # 范围: 1e-5 ~ 5e-5
-    # 过高可能导致过拟合
-  lr_scaling:
-    "sqrt" # 学习率缩放
-    # sqrt: 随GPU数量sqrt缩放
+  learning_rate: 2e-5 # Gemma4 推荐学习率
+  # 范围: 1e-5 ~ 5e-5
+  # 过高可能导致过拟合
+  lr_scaling: "sqrt" # 学习率缩放
+  # sqrt: 随GPU数量sqrt缩放
   warmup_ratio: 0.1 # 10% 步数预热
 
   optimizer:
@@ -151,11 +139,12 @@ training:
 distributed:
   mode:
     "ddp" # DDP 简单高效
-    # 可选: "single"/"ddp"/"fsdp"
-  num_gpus: 8 # GPU数量
+    # 可选: "single"/"ddp"/"fsdp"/"device_map"/"auto"/"multi_node"/"compare"
+    # "multi_node" 仅在多机训练时有效
+    # "nm_gpus: 8 # GPU数量
 
-  ddp:
-    backend: "nccl"
+ddp:
+  backend: "nccl"
 
   fsdp: # FSDP 配置（备用）
     sharding_strategy: "HYBRID_SHARD"
@@ -207,13 +196,11 @@ evaluation:
 # 推理配置 - Gemma4 目标检测
 # ----------------------------------------------------------------------------
 inference:
-  max_new_tokens:
-    128 # 检测结果token数
-    # 单目标约20 tokens
-    # 多目标需增加
-  temperature:
-    0.1 # 低温度保证输出稳定
-    # 检测任务推荐: 0.0-0.2
+  max_new_tokens: 128 # 检测结果token数
+  # 单目标约20 tokens
+  # 多目标需增加
+  temperature: 0.1 # 低温度保证输出稳定
+  # 检测任务推荐: 0.0-0.2
   top_p: 0.9
   top_k: 50
   do_sample: true # 采样模式
