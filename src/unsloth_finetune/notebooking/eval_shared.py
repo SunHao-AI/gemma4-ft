@@ -652,7 +652,17 @@ class MetricsVisualizer:
     SPLIT_COLORS = {"train": "#4C72B0", "valid": "#55A868", "test": "#C44E52"}
 
     @staticmethod
+    def _ensure_chinese_font(plt_module) -> dict:
+        font_family = plt_module.rcParams.get("font.sans-serif", ["DejaVu Sans"])
+        if isinstance(font_family, list):
+            font_name = font_family[0] if font_family else "DejaVu Sans"
+        else:
+            font_name = font_family
+        return {"fontname": font_name, "fontsize": 12}
+
+    @staticmethod
     def plot_metrics_bar_chart(plt_module, metrics_dict: Dict, title: str = "模型性能对比") -> None:
+        font_props = MetricsVisualizer._ensure_chinese_font(plt_module)
         metric_keys = ["mean_precision", "mean_recall", "mean_f1", "mean_mean_match_iou", "success_rate"]
         metric_labels = ["精确率", "召回率", "F1分数", "平均匹配IOU", "检测成功率"]
         splits = list(metrics_dict.keys())
@@ -689,11 +699,11 @@ class MetricsVisualizer:
                 alpha=0.85,
             )
 
-            axis.set_title(f"{split_name} 数据集", fontsize=13, fontweight="bold")
+            axis.set_title(f"{split_name} 数据集", fontsize=13, fontweight="bold", fontname=font_props["fontname"])
             axis.set_xticks(x_values)
-            axis.set_xticklabels(metric_labels, fontsize=9)
+            axis.set_xticklabels(metric_labels, fontsize=9, fontname=font_props["fontname"])
             axis.set_ylim(0, 1.05)
-            axis.legend(fontsize=9)
+            axis.legend(fontsize=9, prop={"family": font_props["fontname"]})
             axis.grid(axis="y", alpha=0.3)
 
             for bar in list(bars1) + list(bars2):
@@ -706,14 +716,16 @@ class MetricsVisualizer:
                         ha="center",
                         va="bottom",
                         fontsize=7,
+                        fontname=font_props["fontname"],
                     )
 
-        figure.suptitle(title, fontsize=15, fontweight="bold", y=1.02)
+        figure.suptitle(title, fontsize=15, fontweight="bold", y=1.02, fontname=font_props["fontname"])
         plt_module.tight_layout()
         plt_module.show()
 
     @staticmethod
     def plot_radar_chart(plt_module, metrics_dict: Dict, title: str = "模型性能雷达图") -> None:
+        font_props = MetricsVisualizer._ensure_chinese_font(plt_module)
         metric_keys = ["mean_precision", "mean_recall", "mean_f1", "mean_mean_match_iou", "success_rate"]
         metric_labels = ["精确率", "召回率", "F1", "匹配IOU", "成功率"]
         splits = list(metrics_dict.keys())
@@ -755,17 +767,18 @@ class MetricsVisualizer:
             axis.fill(angles, ft_vals, alpha=0.15, color=MetricsVisualizer.MODEL_COLORS["微调模型"])
 
             axis.set_xticks(angles[:-1])
-            axis.set_xticklabels(metric_labels, fontsize=10)
+            axis.set_xticklabels(metric_labels, fontsize=10, fontname=font_props["fontname"])
             axis.set_ylim(0, 1.0)
-            axis.set_title(f"{split_name} 数据集", fontsize=12, fontweight="bold", pad=20)
-            axis.legend(loc="upper right", bbox_to_anchor=(1.3, 1.1), fontsize=9)
+            axis.set_title(f"{split_name} 数据集", fontsize=12, fontweight="bold", pad=20, fontname=font_props["fontname"])
+            axis.legend(loc="upper right", bbox_to_anchor=(1.3, 1.1), fontsize=9, prop={"family": font_props["fontname"]})
 
-        figure.suptitle(title, fontsize=15, fontweight="bold", y=1.05)
+        figure.suptitle(title, fontsize=15, fontweight="bold", y=1.05, fontname=font_props["fontname"])
         plt_module.tight_layout()
         plt_module.show()
 
     @staticmethod
     def plot_diff_heatmap(plt_module, metrics_dict: Dict, title: str = "微调改进幅度热力图") -> None:
+        font_props = MetricsVisualizer._ensure_chinese_font(plt_module)
         metric_keys = ["mean_precision", "mean_recall", "mean_f1", "mean_mean_match_iou", "success_rate"]
         metric_labels = ["精确率", "召回率", "F1", "匹配IOU", "成功率"]
         splits = list(metrics_dict.keys())
@@ -782,23 +795,28 @@ class MetricsVisualizer:
         image = axis.imshow(diff_matrix, cmap="RdYlGn", aspect="auto", vmin=-0.3, vmax=0.3)
 
         axis.set_xticks(np.arange(len(metric_keys)))
-        axis.set_xticklabels(metric_labels, fontsize=10)
+        axis.set_xticklabels(metric_labels, fontsize=10, fontname=font_props["fontname"])
         axis.set_yticks(np.arange(len(splits)))
-        axis.set_yticklabels(splits, fontsize=10)
+        axis.set_yticklabels(splits, fontsize=10, fontname=font_props["fontname"])
 
         for row_index in range(len(splits)):
             for column_index in range(len(metric_keys)):
                 value = diff_matrix[row_index, column_index]
                 color = "white" if abs(value) > 0.15 else "black"
-                axis.text(column_index, row_index, f"{value:+.3f}", ha="center", va="center", fontsize=9, color=color)
+                axis.text(
+                    column_index, row_index, f"{value:+.3f}", ha="center", va="center", fontsize=9, color=color,
+                    fontname=font_props["fontname"]
+                )
 
-        axis.set_title(title, fontsize=13, fontweight="bold")
-        figure.colorbar(image, ax=axis, label="改进幅度(微调-原始)", shrink=0.8)
+        axis.set_title(title, fontsize=13, fontweight="bold", fontname=font_props["fontname"])
+        cbar = figure.colorbar(image, ax=axis, shrink=0.8)
+        cbar.set_label("改进幅度(微调-原始)", fontsize=10, fontname=font_props["fontname"])
         plt_module.tight_layout()
         plt_module.show()
 
     @staticmethod
     def plot_iou_distribution(plt_module, all_results: Dict, title: str = "IOU分布对比") -> None:
+        font_props = MetricsVisualizer._ensure_chinese_font(plt_module)
         splits = list(all_results.keys())
         figure, axis = plt_module.subplots(figsize=(10, 5))
 
@@ -837,9 +855,9 @@ class MetricsVisualizer:
             patch.set_facecolor(MetricsVisualizer.MODEL_COLORS[color_key])
             patch.set_alpha(0.7)
 
-        axis.set_xticklabels(labels_for_box, fontsize=9)
-        axis.set_ylabel("匹配IOU", fontsize=11)
-        axis.set_title(title, fontsize=13, fontweight="bold")
+        axis.set_xticklabels(labels_for_box, fontsize=9, fontname=font_props["fontname"])
+        axis.set_ylabel("匹配IOU", fontsize=11, fontname=font_props["fontname"])
+        axis.set_title(title, fontsize=13, fontweight="bold", fontname=font_props["fontname"])
         axis.grid(axis="y", alpha=0.3)
         plt_module.tight_layout()
         plt_module.show()
