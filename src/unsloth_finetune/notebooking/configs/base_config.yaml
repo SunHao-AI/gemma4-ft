@@ -157,7 +157,7 @@ training:
 # 分布式训练配置
 # ----------------------------------------------------------------------------
 distributed:
-  mode: "ddp" # 分布式模式: "single", "ddp", "fsdp", "device_map", "auto", "multi_node", "compare"
+  mode: "ddp" # 分布式模式: "single", "ddp", "fsdp", "device_map", "nd_parallel", "auto", "multi_node", "compare"
   num_gpus: 8 # GPU数量
 
   # DDP配置

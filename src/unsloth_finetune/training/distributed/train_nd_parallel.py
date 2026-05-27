@@ -238,6 +238,12 @@ def main():
     log_level = logging.INFO if accelerator.is_main_process else logging.WARNING
     logging.basicConfig(level=log_level, format="%(asctime)s - %(levelname)s - %(name)s - %(message)s")
 
+    if accelerator.is_main_process:
+        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+        logger.info(f"输出目录已创建: {args.output_dir}")
+
+    accelerator.wait_for_everyone()
+
     model, tokenizer = load_model_and_tokenizer(args, accelerator)
     model = setup_lora(model, args, accelerator)
 
@@ -292,11 +298,32 @@ def main():
 
     trainer.train()
 
+    accelerator.wait_for_everyone()
+
     if accelerator.is_main_process:
-        logger.info("训练完成，正在保存模型...")
-        trainer.save_model(args.output_dir)
+        logger.info("训练完成，正在保存 LoRA adapter...")
+        
+        unwrapped_model = accelerator.unwrap_model(model)
+        
+        if hasattr(unwrapped_model, 'save_pretrained'):
+            unwrapped_model.save_pretrained(args.output_dir)
+        else:
+            trainer.save_model(args.output_dir)
+        
         tokenizer.save_pretrained(args.output_dir)
-        logger.info(f"模型已保存到: {args.output_dir}")
+        
+        adapter_config_path = Path(args.output_dir) / "adapter_config.json"
+        if adapter_config_path.exists():
+            logger.info(f"LoRA adapter 已保存到: {args.output_dir}")
+            logger.info(f"adapter_config.json 已确认存在")
+        else:
+            logger.warning(f"警告: adapter_config.json 未找到，请检查保存是否成功")
+            logger.info(f"尝试使用 PEFTModel.save_pretrained 直接保存...")
+            if hasattr(unwrapped_model, 'peft_config'):
+                unwrapped_model.save_pretrained(args.output_dir)
+                logger.info(f"第二次保存完成")
+
+    accelerator.wait_for_everyone()
 
 
 if __name__ == "__main__":
