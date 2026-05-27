@@ -107,6 +107,8 @@ class DistributedConfig:
 
     dp_shard_size: int = 1
 
+    force_nd_parallel_type: bool = False
+
     device_map_strategy: Optional[str] = None
 
     custom_device_map: Optional[Dict[str, Any]] = None
@@ -519,7 +521,8 @@ class DistributedConfig:
             YAML 格式的 accelerate 配置字符串
         """
         compute_environment = "LOCAL_MACHINE"
-        distributed_type = "ND_PARALLEL"
+
+        distributed_type = self._get_supported_distributed_type()
 
         mixed_precision = "bf16" if self.bf16 else "fp16" if self.fp16 else "no"
 
@@ -527,13 +530,17 @@ class DistributedConfig:
             "compute_environment": compute_environment,
             "distributed_type": distributed_type,
             "mixed_precision": mixed_precision,
-            "parallelism_config": {
+        }
+
+        if distributed_type == "ND_PARALLEL":
+            config["parallelism_config"] = {
                 "dp_replicate_size": self._num_data_parallel_groups,
                 "tp_size": self.tp_size,
                 "dp_shard_size": self.dp_shard_size,
-            },
-            "num_processes": self._num_data_parallel_groups * self.tp_size,
-        }
+            }
+            config["num_processes"] = self._num_data_parallel_groups * self.tp_size
+        else:
+            config["num_processes"] = self._num_data_parallel_groups
 
         if self.dataloader_num_workers is not None:
             config["dataloader_config"] = {
@@ -547,12 +554,14 @@ class DistributedConfig:
         lines.append(f"distributed_type: {distributed_type}")
         lines.append(f"mixed_precision: {mixed_precision}")
 
-        lines.append("parallelism_config:")
-        lines.append(f"  dp_replicate_size: {self._num_data_parallel_groups}")
-        lines.append(f"  tp_size: {self.tp_size}")
-        lines.append(f"  dp_shard_size: {self.dp_shard_size}")
-
-        lines.append(f"num_processes: {self._num_data_parallel_groups * self.tp_size}")
+        if distributed_type == "ND_PARALLEL":
+            lines.append("parallelism_config:")
+            lines.append(f"  dp_replicate_size: {self._num_data_parallel_groups}")
+            lines.append(f"  tp_size: {self.tp_size}")
+            lines.append(f"  dp_shard_size: {self.dp_shard_size}")
+            lines.append(f"num_processes: {self._num_data_parallel_groups * self.tp_size}")
+        else:
+            lines.append(f"num_processes: {self._num_data_parallel_groups}")
 
         if "dataloader_config" in config:
             lines.append("dataloader_config:")
@@ -564,6 +573,25 @@ class DistributedConfig:
         lines.append("use_cpu: False")
 
         return "\n".join(lines)
+
+    def _get_supported_distributed_type(self) -> str:
+        """检测 accelerate 版本并返回支持的 DistributedType
+
+        ND_PARALLEL 需要 accelerate >= 1.11.0
+
+        策略：
+        1. 如果 force_nd_parallel_type=True，强制使用 ND_PARALLEL（用户需确认服务器版本）
+        2. 否则，保守使用 MULTI_GPU（避免本地-服务器版本不匹配问题）
+
+        注意：此方法在本地执行，检测的是本地 accelerate 版本。
+        如果配置文件在本地生成后在服务器运行，可能因版本不匹配导致错误。
+        因此默认保守策略是使用 MULTI_GPU，除非用户显式启用 ND_PARALLEL。
+        """
+        if self.force_nd_parallel_type:
+            logger.info("force_nd_parallel_type=True, 强制使用 ND_PARALLEL。" "请确保服务器上 accelerate >= 1.11.0: pip install accelerate>=1.11.0")
+            return "ND_PARALLEL"
+
+        return "MULTI_GPU"
 
     def save_accelerate_config(self, path: Optional[str] = None) -> str:
         """保存 accelerate 配置文件
@@ -978,6 +1006,7 @@ def create_nd_parallel_config(
     gradient_accumulation_steps: int = 2,
     learning_rate: float = 4e-5,
     lr_scaling: str = "linear",
+    force_nd_parallel_type: bool = False,
     **kwargs,
 ) -> DistributedConfig:
     """便捷函数: 创建 Accelerate ND-Parallel 配置
@@ -985,6 +1014,12 @@ def create_nd_parallel_config(
     使用 HuggingFace Accelerate 的 ND-Parallel 功能实现真正的 2D 并行:
     - Tensor Parallel (TP): 模型层内分片, 组内 GPU 共同计算
     - Data Parallel (DP): 模型副本间梯度同步
+
+    重要版本要求:
+        ND_PARALLEL 需要 accelerate >= 1.11.0
+        如果服务器版本不支持，配置将自动使用 MULTI_GPU (纯数据并行)
+
+        升级命令: pip install accelerate>=1.11.0
 
     Args:
         gpu_groups: GPU分组配置, 每组承载1个完整模型
@@ -999,21 +1034,24 @@ def create_nd_parallel_config(
         gradient_accumulation_steps: 梯度累积步数
         learning_rate: 基础学习率
         lr_scaling: 学习率缩放策略
+        force_nd_parallel_type: 是否强制使用 ND_PARALLEL 类型
+            True: 强制使用 ND_PARALLEL，需确保服务器 accelerate >= 1.11.0
+            False (默认): 保守使用 MULTI_GPU，避免版本不匹配问题
 
     Returns:
         DistributedConfig实例
 
     使用示例:
-        # 16 GPU → 4个模型 × 每个4 GPU
+        # 16 GPU → 4个模型 × 每个4 GPU (保守模式，使用 MULTI_GPU)
         config = create_nd_parallel_config(
             gpu_groups=[[0,1,2,3], [4,5,6,7], [8,9,10,11], [12,13,14,15]],
             per_device_batch_size=8,
         )
 
-        # 或使用 tp_size 自动分组
+        # 强制启用 ND_PARALLEL (需确认服务器版本 >= 1.11.0)
         config = create_nd_parallel_config(
-            tp_size=4,  # 自动: 16 GPU / 4 = 4个模型
-            gpu_ids=[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15],
+            gpu_groups=[[0,1,2,3], [4,5,6,7], [8,9,10,11], [12,13,14,15]],
+            force_nd_parallel_type=True,
         )
     """
     return DistributedConfig(
@@ -1026,6 +1064,7 @@ def create_nd_parallel_config(
         gradient_accumulation_steps=gradient_accumulation_steps,
         learning_rate=learning_rate,
         lr_scaling=lr_scaling,
+        force_nd_parallel_type=force_nd_parallel_type,
         **kwargs,
     )
 

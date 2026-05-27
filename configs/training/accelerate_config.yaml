@@ -1,26 +1,34 @@
 # Accelerate ND-Parallel 配置文件示例
 # 用于 2D 并行训练: Tensor Parallel + Data Parallel
 
+# 重要: ND_PARALLEL 需要 accelerate >= 1.11.0
+# 检查版本: pip show accelerate
+# 升级命令: pip install accelerate>=1.11.0
+
 # 计算环境
 compute_environment: LOCAL_MACHINE
 
-# 分布式类型: ND_PARALLEL 表示多维并行
+# 分布式类型
+# - ND_PARALLEL: 需要 accelerate >= 1.11.0 (支持 TP + DP)
+# - MULTI_GPU: 所有版本支持 (纯数据并行)
+# - FSDP: 所有版本支持 (参数分片)
 distributed_type: ND_PARALLEL
 
 # 混合精度
 mixed_precision: bf16
 
-# 并行配置
+# 并行配置 (仅 ND_PARALLEL 模式)
 # dp_replicate_size: 数据并行组数 (模型副本数)
 # tp_size: 张量并行组大小 (每个模型分布在多少个 GPU 上)
 # dp_shard_size: FSDP 分片大小 (可选, 默认1不分片)
-parallelism_config:
-  dp_replicate_size: 4
-  tp_size: 4
-  dp_shard_size: 1
+#parallelism_config:
+#  dp_replicate_size: 4
+#  tp_size: 4
+#  dp_shard_size: 1
 
-# 总进程数 = dp_replicate_size × tp_size
-# 示例: 4 × 4 = 16 个 GPU
+# 总进程数
+# ND_PARALLEL: num_processes = dp_replicate_size × tp_size
+# MULTI_GPU/FSDP: num_processes = 数据并行组数
 num_processes: 16
 
 # DataLoader 配置
