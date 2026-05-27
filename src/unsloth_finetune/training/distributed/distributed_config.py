@@ -160,6 +160,7 @@ class DistributedConfig:
     model_name: str = ""
     data_path: str = ""
     output_dir: str = ""
+    dataset_len: Optional[int] = None
 
     def __post_init__(self):
         self._validate()
