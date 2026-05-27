@@ -532,7 +532,7 @@ class DistributedConfig:
             "mixed_precision": mixed_precision,
         }
 
-        if distributed_type == "ND_PARALLEL":
+        if self.force_nd_parallel_type:
             config["parallelism_config"] = {
                 "dp_replicate_size": self._num_data_parallel_groups,
                 "tp_size": self.tp_size,
@@ -554,7 +554,7 @@ class DistributedConfig:
         lines.append(f"distributed_type: {distributed_type}")
         lines.append(f"mixed_precision: {mixed_precision}")
 
-        if distributed_type == "ND_PARALLEL":
+        if self.force_nd_parallel_type:
             lines.append("parallelism_config:")
             lines.append(f"  dp_replicate_size: {self._num_data_parallel_groups}")
             lines.append(f"  tp_size: {self.tp_size}")
@@ -575,22 +575,17 @@ class DistributedConfig:
         return "\n".join(lines)
 
     def _get_supported_distributed_type(self) -> str:
-        """检测 accelerate 版本并返回支持的 DistributedType
+        """返回 DistributedType 字符串
 
-        ND_PARALLEL 需要 accelerate >= 1.11.0
+        N-D Parallelism 配置方式：
+        - distributed_type: MULTI_GPU
+        - parallelism_config: {dp_replicate_size, tp_size, dp_shard_size}
 
-        策略：
-        1. 如果 force_nd_parallel_type=True，强制使用 ND_PARALLEL（用户需确认服务器版本）
-        2. 否则，保守使用 MULTI_GPU（避免本地-服务器版本不匹配问题）
-
-        注意：此方法在本地执行，检测的是本地 accelerate 版本。
-        如果配置文件在本地生成后在服务器运行，可能因版本不匹配导致错误。
-        因此默认保守策略是使用 MULTI_GPU，除非用户显式启用 ND_PARALLEL。
+        注意：ND_PARALLEL 不是 DistributedType 枚举值，
+        N-D Parallelism 功能通过 parallelism_config 字段配置。
         """
         if self.force_nd_parallel_type:
-            logger.info("force_nd_parallel_type=True, 强制使用 ND_PARALLEL。" "请确保服务器上 accelerate >= 1.11.0: pip install accelerate>=1.11.0")
-            return "ND_PARALLEL"
-
+            logger.info("force_nd_parallel_type=True, 将启用 ND-Parallelism。" "配置方式: distributed_type=MULTI_GPU + parallelism_config")
         return "MULTI_GPU"
 
     def save_accelerate_config(self, path: Optional[str] = None) -> str:

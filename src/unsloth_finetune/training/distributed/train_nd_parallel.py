@@ -83,16 +83,27 @@ def parse_args():
 
     parser.add_argument("--seed", type=int, default=3407, help="随机种子")
     parser.add_argument("--vision_mode", action="store_true", default=False, help="视觉模型模式")
-    parser.add_argument("--attn_implementation", type=str, default=None, 
-                        choices=["sdpa", "flash_attention_2", "eager"], help="注意力实现")
+    parser.add_argument("--attn_implementation", type=str, default=None, choices=["sdpa", "flash_attention_2", "eager"], help="注意力实现")
 
     parser.add_argument("--tp_size", type=int, default=1, help="Tensor Parallel 组大小 (从 accelerate config 自动获取)")
     parser.add_argument("--dp_shard_size", type=int, default=1, help="FSDP 分片大小")
 
     parser.add_argument("--dataloader_num_workers", type=int, default=None, help="DataLoader workers")
     parser.add_argument("--dataloader_pin_memory", action="store_true", default=True)
+    parser.add_argument("--dataloader_persistent_workers", action="store_true", default=True, help="持久化 DataLoader workers")
 
     parser.add_argument("--gradient_checkpointing", action="store_true", default=True, help="启用梯度检查点")
+
+    parser.add_argument("--tf32", action="store_true", default=True, help="启用 TF32")
+    parser.add_argument("--lr_scaling", type=str, default="linear", choices=["none", "linear", "sqrt"], help="学习率缩放策略")
+
+    parser.add_argument("--image_load_mode", type=str, default="lazy", choices=["preload", "lazy", "batch"], help="图像加载模式")
+
+    parser.add_argument("--gpu_monitor", action="store_true", default=False, help="启用 GPU 监控")
+    parser.add_argument("--gpu_log_dir", type=str, default="gpu_logs", help="GPU 监控日志目录")
+    parser.add_argument("--gpu_log_interval", type=int, default=50, help="GPU 监控日志间隔")
+
+    parser.add_argument("--use_nd_parallel", action="store_true", default=True, help="使用 ND-Parallel 模式 (标记参数)")
 
     return parser.parse_args()
 
@@ -115,9 +126,12 @@ def setup_accelerator(args):
         logger.info(f"进程数: {accelerator.num_processes}")
         logger.info(f"本地 rank: {accelerator.local_process_index}")
 
-        if hasattr(accelerator, "parallelism_config"):
+        if hasattr(accelerator, "parallelism_config") and accelerator.parallelism_config is not None:
             pc = accelerator.parallelism_config
             logger.info(f"ParallelismConfig: dp_replicate={pc.dp_replicate_size}, tp={pc.tp_size}")
+        else:
+            logger.info(f"ParallelismConfig: None (使用纯数据并行 MULTI_GPU 模式)")
+            logger.info(f"提示: 如需启用 Tensor Parallel，请设置 FORCE_ND_PARALLEL_TYPE=True 并确认 accelerate >= 1.11.0")
 
     return accelerator
 
@@ -143,6 +157,7 @@ def load_model_and_tokenizer(args, accelerator):
 
     if args.load_in_4bit:
         from transformers import BitsAndBytesConfig
+
         model_kwargs["quantization_config"] = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_compute_dtype=torch.bfloat16 if args.bf16 else torch.float16,
@@ -167,10 +182,56 @@ def load_model_and_tokenizer(args, accelerator):
     return model, tokenizer
 
 
+def patch_peft_for_gemma4():
+    """Patch PEFT 以支持 Gemma4ClippableLinear 模块
+
+    Unsloth 模型使用自定义的 Gemma4ClippableLinear 包装器，
+    PEFT 默认不支持这种模块类型。此 patch 将 LoRA 注入到
+    内部的 Linear4bit 层上。
+
+    支持不同 PEFT 版本的导入路径：
+    - 新版本: peft.tuners.lora.model
+    - 旧版本: peft.tuners.lora.lora_model
+    """
+    lora_model_class = None
+
+    try:
+        from peft.tuners.lora.model import LoraModel as lora_model_class
+    except ImportError:
+        try:
+            from peft.tuners.lora import lora_model as lora_model_class
+        except ImportError:
+            try:
+                from peft.tuners.lora.lora_model import LoraModel as lora_model_class
+            except ImportError:
+                logger.warning("无法导入 LoraModel，PEFT patch 失败")
+                return False
+
+    if lora_model_class is None:
+        return False
+
+    try:
+        original = lora_model_class._create_new_module
+
+        def patched(lora_config, adapter_name, target, **kwargs):
+            if target.__class__.__name__ == "Gemma4ClippableLinear" and hasattr(target, "linear"):
+                return original(lora_config, adapter_name, target.linear, **kwargs)
+            return original(lora_config, adapter_name, target, **kwargs)
+
+        lora_model_class._create_new_module = staticmethod(patched)
+        logger.info("PEFT 已 patch，支持 Gemma4ClippableLinear")
+        return True
+    except Exception as e:
+        logger.warning(f"PEFT patch 失败: {e}")
+        return False
+
+
 def setup_lora(model, args, accelerator):
     """配置 LoRA"""
     if accelerator.is_main_process:
         logger.info(f"正在配置 LoRA: r={args.lora_r}, alpha={args.lora_alpha}")
+
+    patch_peft_for_gemma4()
 
     lora_config = LoraConfig(
         r=args.lora_r,
@@ -269,8 +330,14 @@ def main():
         report_to="none",
         seed=args.seed,
         dataloader_pin_memory=args.dataloader_pin_memory,
+        dataloader_persistent_workers=args.dataloader_persistent_workers,
         remove_unused_columns=False,
+        use_cpu=False,
     )
+
+    if args.tf32:
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
 
     if args.dataloader_num_workers is not None:
         training_args.dataloader_num_workers = args.dataloader_num_workers
@@ -302,16 +369,16 @@ def main():
 
     if accelerator.is_main_process:
         logger.info("训练完成，正在保存 LoRA adapter...")
-        
+
         unwrapped_model = accelerator.unwrap_model(model)
-        
-        if hasattr(unwrapped_model, 'save_pretrained'):
+
+        if hasattr(unwrapped_model, "save_pretrained"):
             unwrapped_model.save_pretrained(args.output_dir)
         else:
             trainer.save_model(args.output_dir)
-        
+
         tokenizer.save_pretrained(args.output_dir)
-        
+
         adapter_config_path = Path(args.output_dir) / "adapter_config.json"
         if adapter_config_path.exists():
             logger.info(f"LoRA adapter 已保存到: {args.output_dir}")
@@ -319,7 +386,7 @@ def main():
         else:
             logger.warning(f"警告: adapter_config.json 未找到，请检查保存是否成功")
             logger.info(f"尝试使用 PEFTModel.save_pretrained 直接保存...")
-            if hasattr(unwrapped_model, 'peft_config'):
+            if hasattr(unwrapped_model, "peft_config"):
                 unwrapped_model.save_pretrained(args.output_dir)
                 logger.info(f"第二次保存完成")
 
