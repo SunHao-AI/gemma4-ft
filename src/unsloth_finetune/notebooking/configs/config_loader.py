@@ -181,7 +181,7 @@ VALID_PROMPT_LANGS: Set[str] = {"en", "zh"}
 VALID_PROMPT_STYLES: Set[str] = {"simple", "descriptive", "cot"}
 VALID_SPLIT_METHODS: Set[str] = {"random", "sequential", "stratified"}
 VALID_ATTENTION_IMPLS: Set[str] = {"sdpa", "flash_attention_2", "eager"}
-VALID_DISTRIBUTED_MODES: Set[str] = {"single", "DDP", "FSDP", "device_map", "auto", "multi_node", "compare"}
+VALID_DISTRIBUTED_MODES: Set[str] = {"single", "ddp", "fsdp", "device_map", "auto", "multi_node", "compare"}
 VALID_LR_SCALINGS: Set[str] = {"none", "linear", "sqrt"}
 VALID_IMAGE_LOAD_MODES: Set[str] = {"lazy", "preload"}
 

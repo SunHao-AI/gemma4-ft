@@ -102,7 +102,7 @@ training:
     image_load_mode: "lazy"
 
 distributed:
-  mode: "DDP"
+  mode: "ddp"
   num_gpus: 8
 
   ddp:

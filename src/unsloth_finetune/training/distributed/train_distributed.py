@@ -43,12 +43,14 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True,max_s
 
 
 def _early_setup_gpu_groups():
-    """检测 GPU 组配置并返回映射信息
+    """检测 GPU 组配置并设置 CUDA_VISIBLE_DEVICES 实现进程级隔离
 
-    注意：由于 NCCL 与进程级 CUDA_VISIBLE_DEVICES 不兼容，
-    此函数不再修改 CUDA_VISIBLE_DEVICES，只返回映射信息用于：
-    1. 控制 max_memory 配置（限制模型只在特定 GPU 上加载）
-    2. 在 setup_distributed() 中使用逻辑 GPU 0
+    在每个进程导入 torch 之前,根据 GPU 分组设置 CUDA_VISIBLE_DEVICES,
+    使每个进程只能看到其组内的 GPU。这确保 device_map="auto"/"balanced"
+    自然将模型分布到组内 GPU 上,无需手动限制 max_memory。
+
+    必须在 import torch / import unsloth 之前执行,否则 CUDA 已初始化,
+    CUDA_VISIBLE_DEVICES 设置将无效。
 
     环境变量:
         LOCAL_RANK: torchrun 设置的进程本地 rank
@@ -82,6 +84,9 @@ def _early_setup_gpu_groups():
         return None
 
     group = gpu_groups[local_rank]
+
+    cuda_visible = ",".join(str(g) for g in group)
+    os.environ["CUDA_VISIBLE_DEVICES"] = cuda_visible
 
     return (group, list(range(len(group))))
 

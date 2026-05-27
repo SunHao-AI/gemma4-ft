@@ -138,15 +138,15 @@ training:
 # ----------------------------------------------------------------------------
 distributed:
   mode:
-    "DDP" # DDP 简单高效
-    # 可选: "single", "DDP", "FSDP", "device_map", "auto", "multi_node", "compare"
+    "ddp" # ddp 简单高效
+    # 可选: "single", "ddp", "fsdp", "device_map", "auto", "multi_node", "compare"
     # "multi_node" 仅在多机训练时有效
     # "nm_gpus: 8 # GPU数量
 
 ddp:
   backend: "nccl"
 
-  fsdp: # FSDP 配置（备用）
+  fsdp: # fsdp 配置（备用）
     sharding_strategy: "HYBRID_SHARD"
     auto_wrap_policy: "TRANSFORMER_BASED_WRAP"
     backward_prefetch: "BACKWARD_PRE"
@@ -218,6 +218,6 @@ notes:
   recommended_settings: |
     推荐配置:
     - 单GPU训练: batch_size=4-8, grad_accum=4
-    - 8GPU DDP: batch_size=8, grad_accum=2
+    - 8GPU ddp: batch_size=8, grad_accum=2
     - 目标检测任务: 1-3 epochs 足够
     - LoRA rank: 16-32 (根据数据量调整)
