@@ -350,16 +350,32 @@ class DistributedConfig:
                     strategy = DeviceMapStrategy.BALANCED.value
 
                 total_gpus = torch.cuda.device_count()
+                cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+                is_gpu_group_isolated = cuda_visible != "" and "," in cuda_visible
+
                 max_mem = {}
-                for gid in range(total_gpus):
-                    if gid in group:
-                        if self.max_memory_per_gpu is not None and gid in self.max_memory_per_gpu:
-                            max_mem[gid] = self.max_memory_per_gpu[gid]
+                if is_gpu_group_isolated:
+                    for gid in range(total_gpus):
+                        if self.max_memory_per_gpu is not None:
+                            original_gid = group[gid] if gid < len(group) else gid
+                            if original_gid in self.max_memory_per_gpu:
+                                max_mem[gid] = self.max_memory_per_gpu[original_gid]
+                            else:
+                                props = torch.cuda.get_device_properties(gid)
+                                max_mem[gid] = f"{int(props.total_memory / 1024**3 * 0.85)}GiB"
                         else:
                             props = torch.cuda.get_device_properties(gid)
                             max_mem[gid] = f"{int(props.total_memory / 1024**3 * 0.85)}GiB"
-                    else:
-                        max_mem[gid] = "0MiB"
+                else:
+                    for gid in range(total_gpus):
+                        if gid in group:
+                            if self.max_memory_per_gpu is not None and gid in self.max_memory_per_gpu:
+                                max_mem[gid] = self.max_memory_per_gpu[gid]
+                            else:
+                                props = torch.cuda.get_device_properties(gid)
+                                max_mem[gid] = f"{int(props.total_memory / 1024**3 * 0.85)}GiB"
+                        else:
+                            max_mem[gid] = "0MiB"
 
                 return {
                     "strategy": strategy,
@@ -413,7 +429,7 @@ class DistributedConfig:
 
         if self.mode == "device_map" and self.gpu_groups is not None:
             nproc = self.num_data_parallel_groups
-            cmd = f"CUDA_VISIBLE_DEVICES={cuda_devices} torchrun --nproc_per_node={nproc}"
+            cmd = f"torchrun --nproc_per_node={nproc}"
             cmd += f" {script_path}"
             cmd += self._build_args_str()
             cmd += " --use_ddp"
@@ -586,29 +602,12 @@ class DistributedConfig:
         if device_map is not None:
             if isinstance(device_map, dict) and "strategy" in device_map:
                 strategy = device_map["strategy"]
-                gpu_group = device_map.get("gpu_group")
                 max_memory = device_map.get("max_memory")
 
                 kwargs["device_map"] = strategy
 
-                cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
-                is_gpu_group_isolated = cuda_visible != "" and "," in cuda_visible
-
-                if is_gpu_group_isolated:
-                    mapping = getattr(self, "_gpu_group_mapping", None)
-                    if mapping is not None and gpu_group is not None and max_memory is not None:
-                        original_group, remapped_group = mapping
-                        remapped_max_memory = {}
-                        for i, remapped_id in enumerate(remapped_group):
-                            original_id = original_group[i]
-                            if original_id in max_memory:
-                                remapped_max_memory[remapped_id] = max_memory[original_id]
-                        kwargs["max_memory"] = remapped_max_memory
-                    elif max_memory is not None:
-                        kwargs["max_memory"] = max_memory
-                else:
-                    if max_memory is not None:
-                        kwargs["max_memory"] = max_memory
+                if max_memory is not None:
+                    kwargs["max_memory"] = max_memory
             else:
                 kwargs["device_map"] = device_map
 

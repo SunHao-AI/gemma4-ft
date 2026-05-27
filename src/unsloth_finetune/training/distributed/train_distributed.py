@@ -38,24 +38,25 @@ import json
 import os
 import sys
 
+import torch
+
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True,max_split_size_mb:256")
 
 
 def _early_setup_gpu_groups():
-    """检测 GPU 组配置并设置 CUDA_VISIBLE_DEVICES 实现进程级隔离
-
-    在每个进程导入 torch 之前,根据 GPU 分组设置 CUDA_VISIBLE_DEVICES,
-    使每个进程只能看到其组内的 GPU。这确保 device_map="auto"/"balanced"
-    自然将模型分布到组内 GPU 上,无需手动限制 max_memory。
-
-    必须在 import torch / import unsloth 之前执行,否则 CUDA 已初始化,
-    CUDA_VISIBLE_DEVICES 设置将无效。
-
+    """检测 GPU 组配置，用于后续构建 device_map 字典
+    
+    不使用 CUDA_VISIBLE_DEVICES 进行进程级隔离，让每个进程都能看到所有 GPU。
+    GPU 组信息用于在模型加载时手动构建 device_map 字典，限制模型只分布在指定的 GPU 组上。
+    
+    **重要**: 在 import unsloth 之前设置正确的 GPU 设备，确保 Unsloth 编译时的张量
+    创建在正确的 GPU 上，避免 NCCL backend 设备约束冲突。
+    
     环境变量:
         LOCAL_RANK: torchrun 设置的进程本地 rank
         GPU_GROUPS_JSON: GPU 分组配置 (JSON 格式)
-
+    
     使用方式:
         torchrun --nproc_per_node=3 train_distributed.py \
             --gpu_groups '[[0,1],[2,3],[6,7]]' --device_map balanced ...
@@ -84,11 +85,12 @@ def _early_setup_gpu_groups():
         return None
 
     group = gpu_groups[local_rank]
+    primary_gpu = group[0]
 
-    cuda_visible = ",".join(str(g) for g in group)
-    os.environ["CUDA_VISIBLE_DEVICES"] = cuda_visible
+    if torch.cuda.is_available():
+        torch.cuda.set_device(primary_gpu)
 
-    return (group, list(range(len(group))))
+    return (group, group)
 
 
 _EARLY_GPU_MAPPING = _early_setup_gpu_groups()
@@ -536,17 +538,17 @@ def setup_distributed():
     is_distributed = world_size > 1
 
     if is_distributed:
-        dist.init_process_group(backend="nccl")
-
         is_gpu_group_mode = _EARLY_GPU_MAPPING is not None
 
         if is_gpu_group_mode:
-            group = _EARLY_GPU_MAPPING[0]
+            group, _ = _EARLY_GPU_MAPPING
             primary_gpu = group[0]
             torch.cuda.set_device(primary_gpu)
             logger.info(f"GPU组模式: local_rank={local_rank}, 主GPU={primary_gpu}, GPU组={group}")
         else:
             torch.cuda.set_device(local_rank)
+
+        dist.init_process_group(backend="nccl")
 
         os.environ["NCCL_P2P_LEVEL"] = os.environ.get("NCCL_P2P_LEVEL", "SYS")
         os.environ["NCCL_IB_DISABLE"] = os.environ.get("NCCL_IB_DISABLE", "1")
@@ -717,17 +719,18 @@ def setup_gpu_group_visibility(config, local_rank: int) -> tuple[int, int] | Non
     current_cuda_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
     is_isolated = current_cuda_devices != "" and "," in current_cuda_devices
 
+    group = config.gpu_groups[local_rank]
     if is_isolated:
-        logger.info(f"GPU组隔离模式: local_rank={local_rank}, CUDA_VISIBLE_DEVICES={current_cuda_devices}, max_memory将使用逻辑GPU ID")
+        logger.warning(f"GPU组隔离模式检测到: CUDA_VISIBLE_DEVICES={current_cuda_devices}。device_map+gpu_groups模式建议不设置CUDA_VISIBLE_DEVICES")
+        logger.info(f"当前组: local_rank={local_rank}, GPU组={group}, 可见GPU={current_cuda_devices}")
     else:
-        logger.info(f"GPU组NCCL模式: local_rank={local_rank}, CUDA_VISIBLE_DEVICES={current_cuda_devices or '(未设置)'}, max_memory将使用物理GPU ID (含0MiB限制)")
+        logger.info(f"GPU组非隔离模式: local_rank={local_rank}, GPU组={group}, max_memory限制模型分布到组内GPU")
 
     if _EARLY_GPU_MAPPING is not None:
         original_group, remapped_group = _EARLY_GPU_MAPPING
         logger.info(f"GPU映射: 物理组={original_group}, 逻辑组={remapped_group}")
         return (original_group, remapped_group)
 
-    group = config.gpu_groups[local_rank]
     remapped = list(range(len(group)))
     return (group, remapped)
 
@@ -764,7 +767,12 @@ def main():
     _original_prepare_utils = None
     _original_prepare_loader = None
 
-    if config.gpu_groups is not None and config.mode == "device_map" and local_rank < len(config.gpu_groups):
+    dm = config.get_device_map(local_rank)
+    skip_prepare_device_map = False
+    if dm is not None and isinstance(dm, dict) and "strategy" not in dm:
+        skip_prepare_device_map = True
+
+    if skip_prepare_device_map and config.gpu_groups is not None and config.mode == "device_map" and local_rank < len(config.gpu_groups):
         try:
             import unsloth.models.loader_utils as _loader_utils
             import unsloth.models.loader as _loader_mod
@@ -779,7 +787,7 @@ def main():
             if _original_prepare_loader is not None:
                 _loader_mod.prepare_device_map = _noop_prepare_device_map
             _patched_prepare_device_map = True
-            logger.info(f"[rank={local_rank}] monkey-patch Unsloth prepare_device_map() " f"以防止覆盖 device_map (GPU组: {config.gpu_groups[local_rank]})")
+            logger.info(f"[rank={local_rank}] monkey-patch Unsloth prepare_device_map() " f"以防止覆盖自定义 device_map (GPU组: {config.gpu_groups[local_rank]})")
         except Exception as e:
             logger.warning(f"[rank={local_rank}] monkey-patch Unsloth prepare_device_map() 失败: {e}")
 
@@ -812,7 +820,11 @@ def main():
         except Exception:
             pass
 
-        primary_gpu = config.gpu_groups[local_rank][0]
+        if _EARLY_GPU_MAPPING is not None:
+            group, _ = _EARLY_GPU_MAPPING
+            primary_gpu = group[0]
+        else:
+            primary_gpu = 0
         torch.cuda.set_device(primary_gpu)
         logger.info(f"[rank={local_rank}] 重置当前设备: cuda:{primary_gpu}")
 
@@ -953,11 +965,11 @@ def main():
 
     if is_main_process():
         logger.info("开始训练...")
-        gpu_stats = torch.cuda.get_device_properties(local_rank)
-        start_memory = torch.cuda.max_memory_reserved(local_rank) / 1024**3
-        logger.info(f"GPU {local_rank}: {gpu_stats.name}, 初始VRAM: {start_memory:.2f}GB")
+        gpu_stats = torch.cuda.get_device_properties(0)
+        start_memory = torch.cuda.max_memory_reserved(0) / 1024**3
+        logger.info(f"GPU 0: {gpu_stats.name}, 初始VRAM: {start_memory:.2f}GB")
 
-    torch.cuda.reset_peak_memory_stats(local_rank)
+    torch.cuda.reset_peak_memory_stats()
 
     start_time = time.time()
     trainer_stats = trainer.train()
@@ -968,8 +980,8 @@ def main():
     if is_main_process():
         logger.info("训练完成！")
 
-        peak_memory = torch.cuda.max_memory_reserved(local_rank) / 1024**3
-        total_gpu_mem = torch.cuda.get_device_properties(local_rank).total_memory / 1024**3
+        peak_memory = torch.cuda.max_memory_reserved() / 1024**3
+        total_gpu_mem = torch.cuda.get_device_properties(0).total_memory / 1024**3
 
         logger.info(f"峰值VRAM: {peak_memory:.2f}GB / {total_gpu_mem:.1f}GB ({peak_memory / total_gpu_mem * 100:.1f}%)")
 
