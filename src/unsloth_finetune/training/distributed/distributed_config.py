@@ -605,7 +605,23 @@ class DistributedConfig:
         device_map = self.get_device_map()
         if device_map is not None:
             if isinstance(device_map, dict) and "strategy" in device_map:
-                kwargs["device_map"] = device_map["strategy"]
+                strategy = device_map["strategy"]
+                gpu_group = device_map.get("gpu_group")
+                max_memory = device_map.get("max_memory")
+
+                kwargs["device_map"] = strategy
+
+                mapping = getattr(self, "_gpu_group_mapping", None)
+                if mapping is not None and gpu_group is not None and max_memory is not None:
+                    original_group, remapped_group = mapping
+                    remapped_max_memory = {}
+                    for i, remapped_id in enumerate(remapped_group):
+                        original_id = original_group[i]
+                        if original_id in max_memory:
+                            remapped_max_memory[remapped_id] = max_memory[original_id]
+                    kwargs["max_memory"] = remapped_max_memory
+                elif max_memory is not None:
+                    kwargs["max_memory"] = max_memory
             else:
                 kwargs["device_map"] = device_map
 

@@ -618,6 +618,38 @@ def validate_training_configuration(config, effective_lr: float, world_size: int
         )
 
 
+def setup_gpu_group_visibility(config, local_rank: int) -> tuple[int, int] | None:
+    """根据 gpu_groups 配置为当前进程设置 CUDA_VISIBLE_DEVICES
+
+    在 device_map + gpu_groups 模式下，每个进程应该只看到其所属的 GPU 组，
+    而不是所有 GPU。这样可以确保 device_map="balanced" 只在组内均衡分布。
+
+    Args:
+        config: DistributedConfig 实例
+        local_rank: 当前进程的 local_rank
+
+    Returns:
+        如果配置了 gpu_groups，返回 (原始组内GPU列表, 重映射后的组内GPU列表)
+        例如: ([6, 7], [0, 1]) 表示原始 GPU 6,7 被重映射为逻辑 GPU 0,1
+        如果未配置 gpu_groups，返回 None
+    """
+    if config.gpu_groups is None or config.mode != "device_map":
+        return None
+
+    if local_rank >= len(config.gpu_groups):
+        logger.warning(f"local_rank={local_rank} 超出 gpu_groups 范围，跳过设置")
+        return None
+
+    group = config.gpu_groups[local_rank]
+    cuda_devices = ",".join(str(g) for g in group)
+    os.environ["CUDA_VISIBLE_DEVICES"] = cuda_devices
+
+    logger.info(f"GPU组隔离: local_rank={local_rank}, CUDA_VISIBLE_DEVICES={cuda_devices}")
+
+    remapped = list(range(len(group)))
+    return (group, remapped)
+
+
 def main():
     args = parse_args()
     image_size = resolve_image_size(args)
@@ -626,6 +658,11 @@ def main():
     runtime_tuning = auto_tune_runtime(args, world_size)
     attention_backends = detect_attention_backends()
     config = build_config_from_args(args)
+
+    gpu_group_mapping = setup_gpu_group_visibility(config, local_rank)
+
+    if gpu_group_mapping is not None:
+        config._gpu_group_mapping = gpu_group_mapping
 
     effective_lr = config.effective_lr
     effective_batch = config.effective_global_batch
