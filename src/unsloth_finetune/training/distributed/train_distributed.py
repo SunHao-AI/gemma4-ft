@@ -755,6 +755,29 @@ def main():
 
     os.environ["UNSLOTH_DISABLE_STATISTICS"] = "1"
 
+    _patched_prepare_device_map = False
+    _original_prepare_utils = None
+    _original_prepare_loader = None
+
+    if config.gpu_groups is not None and config.mode == "device_map" and local_rank < len(config.gpu_groups):
+        try:
+            import unsloth.models.loader_utils as _loader_utils
+            import unsloth.models.loader as _loader_mod
+
+            _original_prepare_utils = _loader_utils.prepare_device_map
+            _original_prepare_loader = getattr(_loader_mod, "prepare_device_map", None)
+
+            def _noop_prepare_device_map():
+                return None, False
+
+            _loader_utils.prepare_device_map = _noop_prepare_device_map
+            if _original_prepare_loader is not None:
+                _loader_mod.prepare_device_map = _noop_prepare_device_map
+            _patched_prepare_device_map = True
+            logger.info(f"[rank={local_rank}] monkey-patch Unsloth prepare_device_map() " f"以防止覆盖 device_map (GPU组: {config.gpu_groups[local_rank]})")
+        except Exception as e:
+            logger.warning(f"[rank={local_rank}] monkey-patch Unsloth prepare_device_map() 失败: {e}")
+
     model_kwargs = config.get_model_kwargs()
     timings: dict[str, float] = {}
 
@@ -770,6 +793,23 @@ def main():
     model_load_start = time.perf_counter()
     model, processor = FastVisionModel.from_pretrained(**model_kwargs)
     timings["model_load_sec"] = round(time.perf_counter() - model_load_start, 4)
+
+    if _patched_prepare_device_map:
+        try:
+            import unsloth.models.loader_utils as _loader_utils
+            import unsloth.models.loader as _loader_mod
+
+            if _original_prepare_utils is not None:
+                _loader_utils.prepare_device_map = _original_prepare_utils
+            if _original_prepare_loader is not None:
+                _loader_mod.prepare_device_map = _original_prepare_loader
+            logger.info(f"[rank={local_rank}] 已恢复 Unsloth prepare_device_map() 原始函数")
+        except Exception:
+            pass
+
+        primary_gpu = config.gpu_groups[local_rank][0]
+        torch.cuda.set_device(primary_gpu)
+        logger.info(f"[rank={local_rank}] 重置当前设备: cuda:{primary_gpu}")
 
     if config.vision_mode:
         tokenizer = processor.tokenizer
