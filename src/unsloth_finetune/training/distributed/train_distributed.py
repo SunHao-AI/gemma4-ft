@@ -111,6 +111,7 @@ from unsloth_finetune.training.distributed.distributed_config import (
     create_ddp_config,
     create_device_map_config,
     create_fsdp_config,
+    create_nd_parallel_config,
 )
 
 import argparse
@@ -169,10 +170,13 @@ def parse_args():
 
     parser.add_argument("--use_ddp", action="store_true")
     parser.add_argument("--use_fsdp", action="store_true")
+    parser.add_argument("--use_nd_parallel", action="store_true", help="使用 Accelerate ND-Parallel 模式 (Tensor Parallel + Data Parallel)")
 
     parser.add_argument("--models_per_gpu", type=int, default=1, help="每GPU吞吐量倍数 (DDP小模型模式), 映射到batch_size缩放. 例: 8卡×2倍=16路并行")
     parser.add_argument("--gpu_ids", type=str, default=None, help="参与训练的GPU列表, 如'0,1,2,3,4,5,6,7'")
     parser.add_argument("--gpu_groups", type=str, default=None, help="GPU分组配置(JSON), 如'[[0,1],[2,3],[4,5],[6,7]]'. 每组承载1个完整模型(组内模型并行, 组间数据并行)")
+    parser.add_argument("--tp_size", type=int, default=1, help="Tensor Parallel 组大小 (ND-Parallel模式), 每个模型分布在多少个GPU上")
+    parser.add_argument("--dp_shard_size", type=int, default=1, help="FSDP 分片大小 (ND-Parallel模式), 默认1不分片")
     parser.add_argument("--device_map", type=str, default=None, help="模型分片策略: balanced/auto/balanced_low_0 (仅用于模型并行模式, DDP模式下不应设置)")
     parser.add_argument("--max_memory_per_gpu", type=str, default=None, help='每GPU最大可用显存(JSON), 如\'{"0":"40GiB","1":"40GiB"}\'')
     parser.add_argument("--distributed_config", type=str, default=None, help="DistributedConfig JSON配置文件路径 (覆盖其他参数)")
@@ -430,6 +434,40 @@ def build_config_from_args(args) -> DistributedConfig:
     if args.use_fsdp:
         return create_fsdp_config(
             gpu_ids=gpu_ids,
+            per_device_batch_size=args.per_device_batch_size,
+            gradient_accumulation_steps=args.gradient_accumulation_steps,
+            learning_rate=args.learning_rate,
+            lr_scaling=args.lr_scaling,
+            model_name=args.model_name,
+            data_path=args.data_path,
+            output_dir=args.output_dir,
+            max_seq_length=args.max_seq_length,
+            load_in_4bit=load_4bit,
+            lora_r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            seed=args.seed,
+            bf16=args.bf16,
+            vision_mode=args.vision_mode,
+            **gpu_monitor_kwargs,
+            tf32=args.tf32,
+            dataloader_num_workers=args.dataloader_num_workers,
+            dataloader_prefetch_factor=args.dataloader_prefetch_factor,
+            dataloader_pin_memory=args.dataloader_pin_memory,
+            dataloader_persistent_workers=args.dataloader_persistent_workers,
+            dataloader_drop_last=args.dataloader_drop_last,
+            ddp_find_unused_parameters=args.ddp_find_unused_parameters,
+            cpu_threads_per_rank=args.cpu_threads_per_rank,
+            image_load_mode=args.image_load_mode,
+            image_batch_size=args.image_batch_size,
+            materialize_vision_dataset=args.materialize_vision_dataset,
+            attn_implementation=args.attn_implementation,
+        )
+
+    if args.use_nd_parallel:
+        return create_nd_parallel_config(
+            gpu_groups=gpu_groups,
+            tp_size=args.tp_size,
+            dp_shard_size=args.dp_shard_size,
             per_device_batch_size=args.per_device_batch_size,
             gradient_accumulation_steps=args.gradient_accumulation_steps,
             learning_rate=args.learning_rate,
@@ -916,7 +954,7 @@ def main():
     if is_main_process():
         logger.info(f"预热: {config.warmup_ratio} ratio -> {warmup_steps} steps")
 
-    if config.mode == DistributedMode.fsdp.value:
+    if config.mode == DistributedMode.FSDP.value:
         fsdp_cfg = config._load_fsdp_config()
         training_kwargs["fsdp_config"] = fsdp_cfg
 

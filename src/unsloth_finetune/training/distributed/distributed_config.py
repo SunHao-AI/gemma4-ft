@@ -32,9 +32,10 @@ logger = logging.getLogger(__name__)
 
 
 class DistributedMode(Enum):
-    ddp = "ddp"
+    DDP = "ddp"
     DEVICE_MAP = "device_map"
-    fsdp = "fsdp"
+    FSDP = "fsdp"
+    ND_PARALLEL = "nd_parallel"
     SINGLE_GPU = "single_gpu"
 
 
@@ -99,6 +100,12 @@ class DistributedConfig:
     models_per_gpu: int = 1
 
     gpu_groups: Optional[List[List[int]]] = None
+
+    tp_size: int = 1
+
+    dp_replicate_size: Optional[int] = None
+
+    dp_shard_size: int = 1
 
     device_map_strategy: Optional[str] = None
 
@@ -242,10 +249,26 @@ class DistributedConfig:
         if self.mode == "ddp" and not is_distributed_env and self.gpu_ids is not None and len(self.gpu_ids) > 1:
             logger.info("ddp模式需要torchrun多进程启动, 当前为单进程环境(Notebook)" "实际将退化为单GPU模式, 请使用torchrun启动train_distributed.py")
 
-        if self.gpu_groups is not None and self.mode not in ("device_map", "single_gpu"):
+        if self.gpu_groups is not None and self.mode not in ("device_map", "single_gpu", "nd_parallel"):
             if self.mode == "ddp":
-                logger.warning("ddp模式不支持gpu_groups(ddp每卡独立完整模型), 已切换为device_map模式")
-                self.mode = "device_map"
+                logger.warning("ddp模式不支持gpu_groups(ddp每卡独立完整模型), 已切换为nd_parallel模式")
+                self.mode = "nd_parallel"
+
+        if self.mode == "nd_parallel":
+            if self.gpu_groups is not None:
+                self._num_data_parallel_groups = len(self.gpu_groups)
+                self._gpus_per_model = len(self.gpu_groups[0])
+                self.tp_size = self._gpus_per_model
+            elif self.tp_size > 1:
+                total_gpus = torch.cuda.device_count() if self.gpu_ids is None else len(self.gpu_ids)
+                self._num_data_parallel_groups = total_gpus // self.tp_size
+                self._gpus_per_model = self.tp_size
+                if self._num_data_parallel_groups < 1:
+                    raise ValueError(f"tp_size={self.tp_size} 超过可用GPU数={total_gpus}")
+            else:
+                self._num_data_parallel_groups = 1
+                self._gpus_per_model = 1
+                logger.warning("nd_parallel模式需要设置tp_size>1或gpu_groups, 已退化为单GPU模式")
 
         if self.mode == "device_map" and self.gpu_groups is not None:
             self._num_data_parallel_groups = len(self.gpu_groups)
@@ -452,6 +475,129 @@ class DistributedConfig:
             return cmd
 
         return f"python {script_path}"
+
+    def get_accelerate_launch_command(self, script_path: str = "train_distributed.py", config_file: Optional[str] = None) -> str:
+        """生成 accelerate launch 启动命令 (用于 ND-Parallel 模式)
+
+        Args:
+            script_path: 训练脚本路径
+            config_file: accelerate 配置文件路径, None 则使用默认路径
+
+        Returns:
+            完整的 accelerate launch 命令字符串
+        """
+        if self.mode != "nd_parallel":
+            return self.get_torchrun_command(script_path)
+
+        cuda_devices = self.get_cuda_visible_devices()
+
+        num_processes = self._num_data_parallel_groups * self.tp_size
+
+        if config_file is None:
+            config_file = self.get_accelerate_config_path()
+
+        cmd = f"CUDA_VISIBLE_DEVICES={cuda_devices} accelerate launch"
+        cmd += f" --config_file {config_file}"
+        cmd += f" --num_processes {num_processes}"
+        cmd += f" {script_path}"
+        cmd += self._build_args_str()
+        cmd += " --use_nd_parallel"
+        cmd += f" --tp_size {self.tp_size}"
+
+        return cmd
+
+    def get_accelerate_config_path(self) -> str:
+        """获取 accelerate 配置文件路径"""
+        if self.output_dir:
+            return str(Path(self.output_dir) / "accelerate_config.yaml")
+        return "configs/training/accelerate_config.yaml"
+
+    def get_accelerate_config_yaml(self) -> str:
+        """生成 accelerate 配置文件 YAML 内容
+
+        Returns:
+            YAML 格式的 accelerate 配置字符串
+        """
+        compute_environment = "LOCAL_MACHINE"
+        distributed_type = "ND_PARALLEL"
+
+        mixed_precision = "bf16" if self.bf16 else "fp16" if self.fp16 else "no"
+
+        config = {
+            "compute_environment": compute_environment,
+            "distributed_type": distributed_type,
+            "mixed_precision": mixed_precision,
+            "parallelism_config": {
+                "dp_replicate_size": self._num_data_parallel_groups,
+                "tp_size": self.tp_size,
+                "dp_shard_size": self.dp_shard_size,
+            },
+            "num_processes": self._num_data_parallel_groups * self.tp_size,
+        }
+
+        if self.dataloader_num_workers is not None:
+            config["dataloader_config"] = {
+                "dataloader_num_workers": self.dataloader_num_workers,
+                "dataloader_pin_memory": self.dataloader_pin_memory,
+            }
+            if self.dataloader_num_workers > 0 and self.dataloader_prefetch_factor is not None:
+                config["dataloader_config"]["dataloader_prefetch_factor"] = self.dataloader_prefetch_factor
+
+        lines = ["compute_environment: LOCAL_MACHINE"]
+        lines.append(f"distributed_type: {distributed_type}")
+        lines.append(f"mixed_precision: {mixed_precision}")
+
+        lines.append("parallelism_config:")
+        lines.append(f"  dp_replicate_size: {self._num_data_parallel_groups}")
+        lines.append(f"  tp_size: {self.tp_size}")
+        lines.append(f"  dp_shard_size: {self.dp_shard_size}")
+
+        lines.append(f"num_processes: {self._num_data_parallel_groups * self.tp_size}")
+
+        if "dataloader_config" in config:
+            lines.append("dataloader_config:")
+            lines.append(f"  dataloader_num_workers: {self.dataloader_num_workers}")
+            lines.append(f"  dataloader_pin_memory: {self.dataloader_pin_memory}")
+            if self.dataloader_num_workers > 0 and self.dataloader_prefetch_factor is not None:
+                lines.append(f"  dataloader_prefetch_factor: {self.dataloader_prefetch_factor}")
+
+        lines.append("use_cpu: False")
+
+        return "\n".join(lines)
+
+    def save_accelerate_config(self, path: Optional[str] = None) -> str:
+        """保存 accelerate 配置文件
+
+        Args:
+            path: 配置文件保存路径, None 则使用默认路径
+
+        Returns:
+            配置文件的保存路径
+        """
+        if path is None:
+            path = self.get_accelerate_config_path()
+
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+
+        yaml_content = self.get_accelerate_config_yaml()
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(yaml_content)
+
+        logger.info(f"Accelerate 配置文件已保存到: {path}")
+        return path
+
+    def get_launch_command(self, script_path: str = "train_distributed.py") -> str:
+        """智能选择启动命令 (torchrun 或 accelerate launch)
+
+        Args:
+            script_path: 训练脚本路径
+
+        Returns:
+            完整的启动命令字符串
+        """
+        if self.mode == "nd_parallel":
+            return self.get_accelerate_launch_command(script_path)
+        return self.get_torchrun_command(script_path)
 
     def _build_args_str(self) -> str:
         args = []
@@ -819,6 +965,67 @@ def create_device_map_config(
         lr_scaling=lr_scaling,
         max_memory_per_gpu=max_memory_per_gpu,
         custom_device_map=custom_device_map,
+        **kwargs,
+    )
+
+
+def create_nd_parallel_config(
+    gpu_groups: Optional[List[List[int]]] = None,
+    tp_size: int = 1,
+    dp_replicate_size: Optional[int] = None,
+    dp_shard_size: int = 1,
+    per_device_batch_size: int = 4,
+    gradient_accumulation_steps: int = 2,
+    learning_rate: float = 4e-5,
+    lr_scaling: str = "linear",
+    **kwargs,
+) -> DistributedConfig:
+    """便捷函数: 创建 Accelerate ND-Parallel 配置
+
+    使用 HuggingFace Accelerate 的 ND-Parallel 功能实现真正的 2D 并行:
+    - Tensor Parallel (TP): 模型层内分片, 组内 GPU 共同计算
+    - Data Parallel (DP): 模型副本间梯度同步
+
+    Args:
+        gpu_groups: GPU分组配置, 每组承载1个完整模型
+            例: [[0,1,2,3], [4,5,6,7], [8,9,10,11], [12,13,14,15]]
+            → 4组×4卡, 4路数据并行×4卡张量并行
+        tp_size: Tensor Parallel 组大小 (每组GPU数)
+            例: tp_size=4 表示每个模型分布在4个GPU上
+        dp_replicate_size: Data Parallel 组数 (模型副本数)
+            None 则自动计算: total_gpus // tp_size
+        dp_shard_size: FSDP 分片大小 (可选, 默认1不分片)
+        per_device_batch_size: 每数据并行组批次大小
+        gradient_accumulation_steps: 梯度累积步数
+        learning_rate: 基础学习率
+        lr_scaling: 学习率缩放策略
+
+    Returns:
+        DistributedConfig实例
+
+    使用示例:
+        # 16 GPU → 4个模型 × 每个4 GPU
+        config = create_nd_parallel_config(
+            gpu_groups=[[0,1,2,3], [4,5,6,7], [8,9,10,11], [12,13,14,15]],
+            per_device_batch_size=8,
+        )
+
+        # 或使用 tp_size 自动分组
+        config = create_nd_parallel_config(
+            tp_size=4,  # 自动: 16 GPU / 4 = 4个模型
+            gpu_ids=[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15],
+        )
+    """
+    return DistributedConfig(
+        mode="nd_parallel",
+        gpu_groups=gpu_groups,
+        tp_size=tp_size,
+        dp_replicate_size=dp_replicate_size,
+        dp_shard_size=dp_shard_size,
+        per_device_batch_size=per_device_batch_size,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        learning_rate=learning_rate,
+        lr_scaling=lr_scaling,
         **kwargs,
     )
 
