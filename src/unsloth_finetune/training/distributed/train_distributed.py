@@ -346,7 +346,7 @@ class TrainingPerformanceCallback(TrainerCallback):
             return {"steps_observed": 0}
 
         sorted_steps = sorted(self.step_durations)
-        p95_index = min(len(sorted_steps) - 1, max(0, int(len(sorted_steps) * 0.95) - 1))
+        p95_index = min(len(sorted_steps) - 1, int(len(sorted_steps) * 0.95))
         tail = self.step_durations[-min(5, len(self.step_durations)) :]
         return {
             "steps_observed": len(self.step_durations),
@@ -745,8 +745,6 @@ def setup_gpu_group_visibility(config, local_rank: int) -> tuple[int, int] | Non
         例如: ([6, 7], [0, 1]) 表示原始 GPU 6,7 被重映射为逻辑 GPU 0,1
         如果未配置 gpu_groups，返回 None
     """
-    global _EARLY_GPU_MAPPING
-
     if config.gpu_groups is None or config.mode != "device_map":
         return None
 

@@ -54,16 +54,17 @@ docs/
 - 文档中的运行命令优先指向 `scripts/` 或 console scripts
 - 变更目录结构时，同时更新文档、Docker、测试和 notebook 引用
 
-## 兼容层清理建议
+## 兼容层清理状态
 
-以下路径后续可分阶段下线：
+以下历史兼容层已完成清理：
 
-- `gemma4_core/`（历史兼容层，命名保留）
-- `labelme_tools/`（历史兼容层）
-- `distributed_training/`（历史兼容层）
-- `color_contrast_tools/`（历史兼容层）
-- `notebooks/*.py`
+- `gemma4_core/`（已删除）
+- `labelme_tools/`（已删除）
+- `distributed_training/`（已删除）
+- `color_contrast_tools/`（已删除）
+- `gemma4_multimodal_demo/`（已删除）
 
-当前仓库已完成旧路径引用迁移，兼容层在验证通过后可直接移除。
+当前保留的过渡层：
+- `unsloth_finetune/` shim - 建议稳定运行后删除
 
 

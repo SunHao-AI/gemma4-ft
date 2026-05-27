@@ -55,16 +55,28 @@ INFERENCE_TEMPERATURE = 0.7
 INFERENCE_TOP_P = 0.9
 INFERENCE_MAX_NEW_TOKENS = 512
 
+_VERBOSE_STATUS_CACHE: Optional[bool] = None
+_LIVE_TQDM_RANKS_CACHE: Optional[Optional[set]] = None
+_FORCE_LIVE_TQDM_CACHE: Optional[bool] = None
+
 
 def verbose_status_enabled() -> bool:
-    return get_env_value("UNSLOTH_VERBOSE_TQDM_STATUS", "GEMMA4_VERBOSE_TQDM_STATUS") == "1"
+    global _VERBOSE_STATUS_CACHE
+    if _VERBOSE_STATUS_CACHE is None:
+        _VERBOSE_STATUS_CACHE = get_env_value("UNSLOTH_VERBOSE_TQDM_STATUS", "GEMMA4_VERBOSE_TQDM_STATUS") == "1"
+    return _VERBOSE_STATUS_CACHE
 
 
 def parse_live_tqdm_ranks() -> Optional[set]:
+    global _LIVE_TQDM_RANKS_CACHE
+    if _LIVE_TQDM_RANKS_CACHE is not None:
+        return _LIVE_TQDM_RANKS_CACHE
     raw = get_env_value("UNSLOTH_LIVE_TQDM_RANKS", "GEMMA4_LIVE_TQDM_RANKS").strip().lower() or "none"
     if not raw or raw in {"none", "off", "disabled"}:
+        _LIVE_TQDM_RANKS_CACHE = set()
         return set()
     if raw in {"all", "*"}:
+        _LIVE_TQDM_RANKS_CACHE = None
         return None
 
     ranks = set()
@@ -76,14 +88,23 @@ def parse_live_tqdm_ranks() -> Optional[set]:
             ranks.add(int(chunk))
         except ValueError:
             continue
+    _LIVE_TQDM_RANKS_CACHE = ranks
     return ranks
 
 
 def live_tqdm_enabled(rank: Optional[int] = None) -> bool:
-    override = get_env_value("UNSLOTH_FORCE_LIVE_TQDM", "GEMMA4_FORCE_LIVE_TQDM").strip().lower()
-    if override in {"1", "true", "yes", "on"}:
+    global _FORCE_LIVE_TQDM_CACHE
+    if _FORCE_LIVE_TQDM_CACHE is None:
+        override = get_env_value("UNSLOTH_FORCE_LIVE_TQDM", "GEMMA4_FORCE_LIVE_TQDM").strip().lower()
+        if override in {"1", "true", "yes", "on"}:
+            _FORCE_LIVE_TQDM_CACHE = True
+        elif override in {"0", "false", "no", "off"}:
+            _FORCE_LIVE_TQDM_CACHE = False
+        else:
+            _FORCE_LIVE_TQDM_CACHE = None
+    if _FORCE_LIVE_TQDM_CACHE is True:
         return True
-    if override in {"0", "false", "no", "off"}:
+    if _FORCE_LIVE_TQDM_CACHE is False:
         return False
     if not sys.stderr.isatty():
         return False
@@ -767,6 +788,11 @@ class ObjectDetector:
             start_idx = text.find("[")
             if start_idx == -1:
                 return None
+            try:
+                parsed, end_idx = json.JSONDecoder().raw_decode(text[start_idx:])
+                return text[start_idx : start_idx + end_idx]
+            except json.JSONDecodeError:
+                pass
             bracket_count = 0
             for i, char in enumerate(text[start_idx:], start_idx):
                 if char == "[":

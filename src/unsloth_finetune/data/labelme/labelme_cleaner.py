@@ -306,75 +306,91 @@ class LabelMeCleaner:
 
         report_file.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(report_file, "w", encoding="utf-8") as f:
-            f.write("=" * 70 + "\n")
-            f.write("LabelMe标注数据清洗报告\n")
-            f.write("=" * 70 + "\n\n")
-
-            f.write(f"清洗时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"源目录: {self.source_dir}\n")
-            f.write(f"目标目录: {self.target_dir}\n")
-            f.write(f"去重模式: {'开启' if self.deduplicate else '关闭'}\n")
-            f.write(f"耗时: {result.duration:.2f} 秒\n" if result.duration else "耗时: N/A\n")
-            f.write("\n")
-
-            f.write("-" * 70 + "\n")
-            f.write("统计摘要\n")
-            f.write("-" * 70 + "\n")
-            f.write(f"总文件数: {result.total_files}\n")
-            f.write(f"合规文件: {result.valid_count} ({result.valid_ratio:.1f}%)\n" if result.valid_ratio else f"合规文件: {result.valid_count}\n")
-            f.write(f"不合规文件: {result.invalid_count}\n")
-            f.write(f"重复标注文件: {result.duplicate_count} ({result.duplicate_ratio:.1f}%)\n" if result.duplicate_ratio else f"重复标注文件: {result.duplicate_count}\n")
-            f.write(f"复制JSON文件数: {len(result.copied_json_files)}\n")
-            f.write(f"复制图片文件数: {len(result.copied_image_files)}\n")
-            f.write("\n")
-
-            if result.duplicate_files:
-                f.write("-" * 70 + "\n")
-                f.write("重复标注文件详情\n")
-                f.write("-" * 70 + "\n")
-
-                image_groups: Dict[str, List[Dict]] = {}
-                for item in result.duplicate_files:
-                    image_file = item.get("image_file", "unknown")
-                    if image_file not in image_groups:
-                        image_groups[image_file] = []
-                    image_groups[image_file].append(item)
-
-                for image_file, items in image_groups.items():
-                    f.write(f"\n图片: {Path(image_file).name}\n")
-                    f.write(f"  重复标注数: {len(items)}\n")
-                    for item in items:
-                        f.write(f"    - {Path(item['file']).name}\n")
-                        f.write(f"      原因: {item['reason']}\n")
-
-                f.write("\n")
-
-            if result.invalid_files:
-                f.write("-" * 70 + "\n")
-                f.write("不合规文件详情\n")
-                f.write("-" * 70 + "\n")
-
-                status_groups: Dict[str, List[Dict]] = {}
-                for item in result.invalid_files:
-                    status = item.get("status", "unknown")
-                    if status not in status_groups:
-                        status_groups[status] = []
-                    status_groups[status].append(item)
-
-                for status, items in status_groups.items():
-                    f.write(f"\n[{status}] ({len(items)} 个文件)\n")
-                    for item in items:
-                        f.write(f"  文件: {item['file']}\n")
-                        f.write(f"  原因: {item['reason']}\n")
-
-                f.write("\n")
-
-            f.write("=" * 70 + "\n")
-            f.write("报告结束\n")
-            f.write("=" * 70 + "\n")
+        report_content = self._build_report_content(result)
+        self._atomic_write(report_file, report_content)
 
         return str(report_file)
+
+    def _build_report_content(self, result: CleaningResult) -> str:
+        lines = []
+        lines.append("=" * 70)
+        lines.append("LabelMe标注数据清洗报告")
+        lines.append("=" * 70)
+        lines.append("")
+        lines.append(f"清洗时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append(f"源目录: {self.source_dir}")
+        lines.append(f"目标目录: {self.target_dir}")
+        lines.append(f"去重模式: {'开启' if self.deduplicate else '关闭'}")
+        lines.append(f"耗时: {result.duration:.2f} 秒" if result.duration else "耗时: N/A")
+        lines.append("")
+        lines.append("-" * 70)
+        lines.append("统计摘要")
+        lines.append("-" * 70)
+        lines.append(f"总文件数: {result.total_files}")
+        lines.append(f"合规文件: {result.valid_count} ({result.valid_ratio:.1f}%)" if result.valid_ratio else f"合规文件: {result.valid_count}")
+        lines.append(f"不合规文件: {result.invalid_count}")
+        lines.append(f"重复标注文件: {result.duplicate_count} ({result.duplicate_ratio:.1f}%)" if result.duplicate_ratio else f"重复标注文件: {result.duplicate_count}")
+        lines.append(f"复制JSON文件数: {len(result.copied_json_files)}")
+        lines.append(f"复制图片文件数: {len(result.copied_image_files)}")
+        lines.append("")
+
+        if result.duplicate_files:
+            lines.append("-" * 70)
+            lines.append("重复标注文件详情")
+            lines.append("-" * 70)
+
+            image_groups: Dict[str, List[Dict]] = {}
+            for item in result.duplicate_files:
+                image_file = item.get("image_file", "unknown")
+                if image_file not in image_groups:
+                    image_groups[image_file] = []
+                image_groups[image_file].append(item)
+
+            for image_file, items in image_groups.items():
+                lines.append(f"\n图片: {Path(image_file).name}")
+                lines.append(f"  重复标注数: {len(items)}")
+                for item in items:
+                    lines.append(f"    - {Path(item['file']).name}")
+                    lines.append(f"      原因: {item['reason']}")
+
+            lines.append("")
+
+        if result.invalid_files:
+            lines.append("-" * 70)
+            lines.append("不合规文件详情")
+            lines.append("-" * 70)
+
+            status_groups: Dict[str, List[Dict]] = {}
+            for item in result.invalid_files:
+                status = item.get("status", "unknown")
+                if status not in status_groups:
+                    status_groups[status] = []
+                status_groups[status].append(item)
+
+            for status, items in status_groups.items():
+                lines.append(f"\n[{status}] ({len(items)} 个文件)")
+                for item in items:
+                    lines.append(f"  文件: {item['file']}")
+                    lines.append(f"  原因: {item['reason']}")
+
+            lines.append("")
+
+        lines.append("=" * 70)
+        lines.append("报告结束")
+        lines.append("=" * 70)
+
+        return "\n".join(lines) + "\n"
+
+    def _atomic_write(self, file_path: Path, content: str) -> None:
+        temp_file = file_path.with_suffix(file_path.suffix + ".tmp")
+        try:
+            with open(temp_file, "w", encoding="utf-8") as f:
+                f.write(content)
+            temp_file.replace(file_path)
+        except Exception:
+            if temp_file.exists():
+                temp_file.unlink()
+            raise
 
     def _download_remote_image(self, image_url: str, target_dir: Path, json_path: Path) -> Optional[Path]:
         """

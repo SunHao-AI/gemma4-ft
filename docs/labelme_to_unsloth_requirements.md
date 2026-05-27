@@ -2,7 +2,11 @@
 
 **版本**: v1.0
 **日期**: 2025-05-22
-**状态**: 待确认
+**状态**: 已实现
+**实现模块**:
+- `src/unsloth_finetune/data/labelme/labelme_converter.py`
+- `src/unsloth_finetune/data/labelme/detection_format.py`
+- `src/unsloth_finetune/tools/labelme_to_training_format.py`
 
 ---
 

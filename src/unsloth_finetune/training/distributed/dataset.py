@@ -29,6 +29,7 @@ import gc
 import json
 import logging
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional, Union
@@ -152,6 +153,7 @@ class MultimodalDataset:
         self._raw_data: list[dict] = []
         self._image_cache: dict[str, PILImage.Image] = {}
         self._loaded_indices: set[int] = set()
+        self._cache_lock = threading.Lock()
 
         if not self.data_path.exists():
             raise FileNotFoundError(f"数据文件不存在: {data_path}")
@@ -268,19 +270,22 @@ class MultimodalDataset:
                 img_path = futures[future]
                 result = future.result()
                 if result is not None:
-                    self._image_cache[img_path] = result
-                    success_count += 1
+                    with self._cache_lock:
+                        self._image_cache[img_path] = result
+                        success_count += 1
                 else:
                     fail_count += 1
 
                 if pbar:
                     pbar.update(1)
                     if idx % check_interval == 0 and idx > 0:
+                        with self._cache_lock:
+                            cache_size = len(self._image_cache)
                         pbar.set_postfix(
                             {
                                 "成功": success_count,
                                 "失败": fail_count,
-                                "缓存": len(self._image_cache),
+                                "缓存": cache_size,
                             }
                         )
 
@@ -692,7 +697,7 @@ def create_multimodal_dataset(
         image_size: 训练前统一重采样尺寸 (width, height)
 
     Returns:
-        MultimodalDataset 宝例
+        MultimodalDataset 实例
     """
     return MultimodalDataset(
         data_path=data_path,

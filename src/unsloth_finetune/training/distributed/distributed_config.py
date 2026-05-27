@@ -679,8 +679,8 @@ class DistributedConfig:
         use_bf16 = self.bf16 and torch.cuda.is_bf16_supported()
         use_fp16 = self.fp16 or (not use_bf16 and not self.bf16)
 
-        dataset_len = 1000
-        warmup_steps = max(1, int(dataset_len * self.num_epochs / self.effective_global_batch * self.warmup_ratio))
+        effective_dataset_len = self.dataset_len if self.dataset_len is not None else 1000
+        warmup_steps = max(1, int(effective_dataset_len * self.num_epochs / self.effective_global_batch * self.warmup_ratio))
 
         effective_batch_size = self.per_device_batch_size
         if self.mode == "ddp" and self.models_per_gpu > 1:

@@ -1,4 +1,4 @@
-﻿﻿# unsloth-finetune 项目架构文档
+﻿# unsloth-finetune 项目架构文档
 
 ## 项目定位
 
@@ -106,13 +106,13 @@ unsloth_finetune.tools.color_contrast
 
 ## 清理状态
 
-以下旧兼容层已完成迁移并进入清理范围：
+以下旧兼容层已完成迁移并已删除：
 
-- `gemma4_core/`（历史兼容层，命名保留）
-- `labelme_tools/`（历史兼容层）
-- `distributed_training/`（历史兼容层）
-- `color_contrast_tools/`（历史兼容层）
-- `notebooks/*.py`
+- `gemma4_core/`（已删除）
+- `labelme_tools/`（已删除）
+- `distributed_training/`（已删除）
+- `color_contrast_tools/`（已删除）
+- `gemma4_multimodal_demo/`（已删除）
 
-旧路径引用已迁移到 `unsloth_finetune.*` 与 `scripts/`，兼容层可在验证通过后移除。
+根目录 `unsloth_finetune/` shim 当前保留作为过渡兼容层，建议在稳定运行后删除。
 
