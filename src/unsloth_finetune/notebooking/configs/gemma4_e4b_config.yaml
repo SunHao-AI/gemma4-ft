@@ -88,12 +88,12 @@ model_loading:
 # ----------------------------------------------------------------------------
 lora:
   r:
-    16 # LoRA秩
+    32 # LoRA秩
     # E4B模型推荐: 16-32
     # 16: 平衡性能与资源
     # 32: 更强表达能力
 
-  alpha: 16 # 缩放因子 (通常等于r)
+  alpha: 32 # 缩放因子 (通常等于r)
   dropout: 0 # Unsloth 推荐 0
 
   target_modules: # Gemma4 LoRA目标模块
@@ -101,10 +101,9 @@ lora:
     - "k_proj" # Key投影
     - "v_proj" # Value投影
     - "o_proj" # Output投影
-    # 可选扩展:
-    # - "gate_proj"
-    # - "up_proj"
-    # - "down_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
 
   bias: "none"
   use_rslora: false
