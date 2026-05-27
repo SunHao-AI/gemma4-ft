@@ -726,6 +726,8 @@ def main():
 
     gpu_group_mapping = setup_gpu_group_visibility(config, local_rank)
 
+    config.local_rank = local_rank
+
     if gpu_group_mapping is not None:
         config._gpu_group_mapping = gpu_group_mapping
 
@@ -747,8 +749,11 @@ def main():
     if is_main_process():
         logger.info("正在加载模型...")
         dm = model_kwargs.get("device_map")
+        mm = model_kwargs.get("max_memory")
         dm_desc = str(dm) if dm is not None else "None (每进程独立GPU)"
+        mm_desc = str(mm) if mm is not None else "None"
         logger.info(f"device_map: {dm_desc}")
+        logger.info(f"max_memory: {mm_desc}")
 
     model_load_start = time.perf_counter()
     model, processor = FastVisionModel.from_pretrained(**model_kwargs)

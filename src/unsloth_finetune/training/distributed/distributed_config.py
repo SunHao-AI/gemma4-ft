@@ -92,6 +92,8 @@ class DistributedConfig:
 
     mode: str = "ddp"
 
+    local_rank: int = 0
+
     gpu_ids: Optional[List[int]] = None
 
     models_per_gpu: int = 1
@@ -614,7 +616,7 @@ class DistributedConfig:
         if self.load_in_4bit:
             kwargs["load_in_4bit"] = True
 
-        device_map = self.get_device_map()
+        device_map = self.get_device_map(self.local_rank)
         if device_map is not None:
             if isinstance(device_map, dict) and "strategy" in device_map:
                 strategy = device_map["strategy"]
@@ -694,7 +696,7 @@ class DistributedConfig:
             n = torch.cuda.device_count()
             lines.append(f"  可用GPU: {n}")
 
-        device_map = self.get_device_map()
+        device_map = self.get_device_map(self.local_rank)
         dm_desc = str(device_map) if device_map is not None else "None (DDP每进程独立GPU)"
         lines.append(f"  device_map: {dm_desc}")
 
