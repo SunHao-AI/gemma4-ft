@@ -34,19 +34,73 @@
   - NCCL P2P通信优化 (A6000 NVLink)
   - GPU显存/利用率实时监控
 """
-# Unsloth 必须在所有其他导入之前导入以确保优化生效
-import unsloth  # noqa: F401
-
-import gc
 import json
-import logging
 import os
-import statistics
-import time
-from pathlib import Path
+import sys
 
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True,max_split_size_mb:256")
+
+
+def _early_setup_gpu_groups():
+    """在导入 Unsloth 之前根据环境变量设置进程级 CUDA_VISIBLE_DEVICES
+
+    这是关键步骤：Unsloth 在导入时会缓存 GPU 信息，必须在导入前设置。
+
+    环境变量:
+        LOCAL_RANK: torchrun 设置的进程本地 rank
+        GPU_GROUPS_JSON: GPU 分组配置 (JSON 格式)
+
+    使用方式:
+        # 方式1: 通过环境变量传递
+        export GPU_GROUPS_JSON='[[0,1],[2,3],[6,7]]'
+        CUDA_VISIBLE_DEVICES=0,1,2,3,6,7 torchrun --nproc_per_node=3 train_distributed.py \
+            --gpu_groups '[[0,1],[2,3],[6,7]]' --device_map balanced ...
+
+        # 方式2: 自动从命令行参数提取 (需要解析部分参数)
+        torchrun --nproc_per_node=3 train_distributed.py \
+            --gpu_groups '[[0,1],[2,3],[6,7]]' --device_map balanced ...
+    """
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+
+    gpu_groups_json = os.environ.get("GPU_GROUPS_JSON")
+    if gpu_groups_json is None:
+        for i, arg in enumerate(sys.argv):
+            if arg == "--gpu_groups" and i + 1 < len(sys.argv):
+                gpu_groups_json = sys.argv[i + 1]
+                break
+
+    if gpu_groups_json is None:
+        return None
+
+    try:
+        gpu_groups = json.loads(gpu_groups_json)
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(gpu_groups, list) or len(gpu_groups) == 0:
+        return None
+
+    if local_rank >= len(gpu_groups):
+        return None
+
+    group = gpu_groups[local_rank]
+    cuda_devices = ",".join(str(g) for g in group)
+    os.environ["CUDA_VISIBLE_DEVICES"] = cuda_devices
+
+    return (group, list(range(len(group))))
+
+
+_EARLY_GPU_MAPPING = _early_setup_gpu_groups()
+
+
+import unsloth  # noqa: F401
+
+import gc
+import logging
+import statistics
+import time
+from pathlib import Path
 
 from unsloth_finetune.training.distributed.distributed_config import (
     DistributedConfig,
@@ -142,9 +196,9 @@ def parse_args():
     parser.add_argument("--materialize_vision_dataset", action=argparse.BooleanOptionalAction, default=False, help="是否在训练前将视觉数据集整体物化为list")
     parser.add_argument("--image_width", type=int, default=512, help="视觉训练输入图片宽度")
     parser.add_argument("--image_height", type=int, default=512, help="视觉训练输入图片高度")
-    parser.add_argument("--attn_implementation", type=str, default=None,
-                        choices=["sdpa", "flash_attention_2", "eager"],
-                        help="注意力实现方式: sdpa(推荐), flash_attention_2, eager. None则由Unsloth自动选择")
+    parser.add_argument(
+        "--attn_implementation", type=str, default=None, choices=["sdpa", "flash_attention_2", "eager"], help="注意力实现方式: sdpa(推荐), flash_attention_2, eager. None则由Unsloth自动选择"
+    )
 
     parser.add_argument("--gpu_monitor", action="store_true", default=True)
     parser.add_argument("--gpu_log_dir", type=str, default="gpu_logs")
@@ -483,7 +537,15 @@ def setup_distributed():
 
     if is_distributed:
         dist.init_process_group(backend="nccl")
-        torch.cuda.set_device(local_rank)
+
+        visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+        is_gpu_group_mode = _EARLY_GPU_MAPPING is not None
+
+        if is_gpu_group_mode:
+            torch.cuda.set_device(0)
+            logger.info(f"GPU组模式: local_rank={local_rank}, 设置逻辑GPU 0 (CUDA_VISIBLE_DEVICES={visible_devices})")
+        else:
+            torch.cuda.set_device(local_rank)
 
         os.environ["NCCL_P2P_LEVEL"] = os.environ.get("NCCL_P2P_LEVEL", "SYS")
         os.environ["NCCL_IB_DISABLE"] = os.environ.get("NCCL_IB_DISABLE", "1")
@@ -492,10 +554,12 @@ def setup_distributed():
         if rank == 0:
             logger.info("分布式训练初始化完成")
             logger.info(f"  Rank: {rank}, Local Rank: {local_rank}, World Size: {world_size}")
+            logger.info(f"  CUDA_VISIBLE_DEVICES: {visible_devices}")
 
-            for i in range(world_size):
+            visible_count = torch.cuda.device_count()
+            for i in range(visible_count):
                 props = torch.cuda.get_device_properties(i)
-                logger.info(f"  GPU {i}: {props.name}, {props.total_memory / 1024**3:.1f}GB")
+                logger.info(f"  逻辑GPU {i}: {props.name}, {props.total_memory / 1024**3:.1f}GB")
 
     return local_rank, world_size, is_distributed
 
@@ -514,9 +578,7 @@ def is_main_process():
 def resolve_image_size(args) -> tuple[int, int]:
     """解析并验证训练图片尺寸参数"""
     if args.image_width <= 0 or args.image_height <= 0:
-        raise ValueError(
-            f"图片尺寸必须为正整数, 当前: width={args.image_width}, height={args.image_height}"
-        )
+        raise ValueError(f"图片尺寸必须为正整数, 当前: width={args.image_width}, height={args.image_height}")
     return args.image_width, args.image_height
 
 
@@ -619,10 +681,12 @@ def validate_training_configuration(config, effective_lr: float, world_size: int
 
 
 def setup_gpu_group_visibility(config, local_rank: int) -> tuple[int, int] | None:
-    """根据 gpu_groups 配置为当前进程设置 CUDA_VISIBLE_DEVICES
+    """确认 GPU 组隔离状态并返回映射信息
 
-    在 device_map + gpu_groups 模式下，每个进程应该只看到其所属的 GPU 组，
-    而不是所有 GPU。这样可以确保 device_map="balanced" 只在组内均衡分布。
+    注意：CUDA_VISIBLE_DEVICES 已在脚本开头（导入 Unsloth 之前）设置。
+    此函数主要用于：
+    1. 确认 GPU 组隔离已生效
+    2. 将映射信息传递给 DistributedConfig 用于 max_memory 重映射
 
     Args:
         config: DistributedConfig 实例
@@ -633,6 +697,8 @@ def setup_gpu_group_visibility(config, local_rank: int) -> tuple[int, int] | Non
         例如: ([6, 7], [0, 1]) 表示原始 GPU 6,7 被重映射为逻辑 GPU 0,1
         如果未配置 gpu_groups，返回 None
     """
+    global _EARLY_GPU_MAPPING
+
     if config.gpu_groups is None or config.mode != "device_map":
         return None
 
@@ -640,12 +706,15 @@ def setup_gpu_group_visibility(config, local_rank: int) -> tuple[int, int] | Non
         logger.warning(f"local_rank={local_rank} 超出 gpu_groups 范围，跳过设置")
         return None
 
+    current_cuda_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+    logger.info(f"GPU组隔离: local_rank={local_rank}, CUDA_VISIBLE_DEVICES={current_cuda_devices}")
+
+    if _EARLY_GPU_MAPPING is not None:
+        original_group, remapped_group = _EARLY_GPU_MAPPING
+        logger.info(f"GPU映射: 原始={original_group} -> 逻辑={remapped_group}")
+        return (original_group, remapped_group)
+
     group = config.gpu_groups[local_rank]
-    cuda_devices = ",".join(str(g) for g in group)
-    os.environ["CUDA_VISIBLE_DEVICES"] = cuda_devices
-
-    logger.info(f"GPU组隔离: local_rank={local_rank}, CUDA_VISIBLE_DEVICES={cuda_devices}")
-
     remapped = list(range(len(group)))
     return (group, remapped)
 
@@ -906,4 +975,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

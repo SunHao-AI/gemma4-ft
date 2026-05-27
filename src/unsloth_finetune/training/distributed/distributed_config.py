@@ -185,12 +185,20 @@ class DistributedConfig:
                 raise ValueError(
                     "GPU分组中存在重复GPU, 每个GPU只能属于一个分组"
                 )
-            available = torch.cuda.device_count()
-            for gid in all_gpus:
-                if gid < 0 or gid >= available:
-                    raise ValueError(
-                        f"gpu_groups中{gid}超出范围(0-{available-1})"
-                    )
+
+            cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+            is_gpu_group_isolated = cuda_visible != "" and "," in cuda_visible and len(cuda_visible.split(",")) < len(all_gpus)
+
+            if not is_gpu_group_isolated:
+                available = torch.cuda.device_count()
+                for gid in all_gpus:
+                    if gid < 0 or gid >= available:
+                        raise ValueError(
+                            f"gpu_groups中{gid}超出范围(0-{available-1}), 可用GPU数: {available}"
+                        )
+            else:
+                max_gpu = max(all_gpus) if all_gpus else 0
+                logger.debug(f"GPU组隔离模式: CUDA_VISIBLE_DEVICES={cuda_visible}, 物理GPU编号范围检查已跳过 (物理编号最大值={max_gpu})")
 
         if self.mode == "ddp" and self.device_map_strategy is not None:
             raise ValueError(
