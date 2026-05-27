@@ -157,14 +157,14 @@ training:
 # 分布式训练配置
 # ----------------------------------------------------------------------------
 distributed:
-  mode: "ddp" # 分布式模式: "single"/"ddp"/"fsdp"
+  mode: "DDP" # 分布式模式: "single", "DDP", "FSDP", "device_map", "auto", "multi_node", "compare"
   num_gpus: 8 # GPU数量
 
   # DDP配置
   ddp:
     backend: "nccl" # DDP后端
 
-  # FSDP配置（仅在mode="fsdp"时生效）
+  # FSDP配置（仅在mode="FSDP"时生效）
   fsdp:
     sharding_strategy: "FULL_SHARD" # 分片策略
     auto_wrap_policy: "TRANSFORMER_BASED_WRAP"

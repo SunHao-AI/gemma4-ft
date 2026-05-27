@@ -138,8 +138,8 @@ training:
 # ----------------------------------------------------------------------------
 distributed:
   mode:
-    "ddp" # DDP 简单高效
-    # 可选: "single"/"ddp"/"fsdp"/"device_map"/"auto"/"multi_node"/"compare"
+    "DDP" # DDP 简单高效
+    # 可选: "single", "DDP", "FSDP", "device_map", "auto", "multi_node", "compare"
     # "multi_node" 仅在多机训练时有效
     # "nm_gpus: 8 # GPU数量
 

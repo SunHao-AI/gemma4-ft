@@ -12,6 +12,8 @@
   third-party → local → styles；
   样式导入放最后
 
+- 当前项目部署在远程服务器, 本地不具备完整运行环境
+
 ## Pitfalls
 
 - 暂无

@@ -181,7 +181,7 @@ VALID_PROMPT_LANGS: Set[str] = {"en", "zh"}
 VALID_PROMPT_STYLES: Set[str] = {"simple", "descriptive", "cot"}
 VALID_SPLIT_METHODS: Set[str] = {"random", "sequential", "stratified"}
 VALID_ATTENTION_IMPLS: Set[str] = {"sdpa", "flash_attention_2", "eager"}
-VALID_DISTRIBUTED_MODES: Set[str] = {"single", "ddp", "fsdp", "device_map", "auto", "multi_node", "compare"}
+VALID_DISTRIBUTED_MODES: Set[str] = {"single", "DDP", "FSDP", "device_map", "auto", "multi_node", "compare"}
 VALID_LR_SCALINGS: Set[str] = {"none", "linear", "sqrt"}
 VALID_IMAGE_LOAD_MODES: Set[str] = {"lazy", "preload"}
 
@@ -524,7 +524,7 @@ class TrainingConfigLoader:
     def _validate_distributed(self) -> None:
         dist = self.distributed
 
-        if dist.mode.lower() not in VALID_DISTRIBUTED_MODES:
+        if dist.mode.lower() not in VALID_DISTRIBUTED_MODES and dist.mode.upper() not in VALID_DISTRIBUTED_MODES:
             self._validation_errors.append(f"无效的 distributed mode: '{dist.mode}'，可选值: {VALID_DISTRIBUTED_MODES}")
 
         if dist.num_gpus <= 0:

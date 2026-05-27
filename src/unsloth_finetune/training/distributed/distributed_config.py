@@ -32,9 +32,9 @@ logger = logging.getLogger(__name__)
 
 
 class DistributedMode(Enum):
-    DDP = "ddp"
+    DDP = "DDP"
     DEVICE_MAP = "device_map"
-    FSDP = "fsdp"
+    FSDP = "FSDP"
     SINGLE_GPU = "single_gpu"
 
 

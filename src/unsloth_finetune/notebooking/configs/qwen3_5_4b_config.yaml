@@ -13,27 +13,29 @@ model:
   name: "qwen3_5_4b"
   family: "qwen"
   version: "4B"
-  base_model_path: ""               # 基础模型路径
-                                    # 示例: "/path/to/Qwen3.5-4B-VL"
+  base_model_path:
+    "" # 基础模型路径
+    # 示例: "/path/to/Qwen3.5-4B-VL"
   description: "Alibaba Qwen3.5 4B Vision-Language Model"
 
 data_preparation:
-  coord_norm: "norm_1000"           # Qwen3.5 推荐归一化范围
-  
-  coord_format: "xyxy"              # Qwen3.5 使用传统 xyxy 格式
-                                    # [x_min, y_min, x_max, y_max]
-  
-  output_format: "box_2d_json"      # JSON 数组格式
-  
+  coord_norm: "norm_1000" # Qwen3.5 推荐归一化范围
+
+  coord_format:
+    "xyxy" # Qwen3.5 使用传统 xyxy 格式
+    # [x_min, y_min, x_max, y_max]
+
+  output_format: "box_2d_json" # JSON 数组格式
+
   prompt:
-    lang: "zh"                      # Qwen3.5 中文能力强
+    lang: "zh" # Qwen3.5 中文能力强
     style: "descriptive"
-  
+
   split:
     ratio: "8:1:1"
     method: "random"
     seed: 42
-  
+
   filter:
     class_whitelist: []
     class_blacklist: []
@@ -45,29 +47,33 @@ data_preparation:
     keep_empty: false
 
 model_loading:
-  max_seq_length: 2048              # Qwen3.5 支持较长序列
-                                    # 可选: 512/1024/2048/4096
-  
+  max_seq_length:
+    2048 # Qwen3.5 支持较长序列
+    # 可选: 512/1024/2048/4096
+
   quantization:
-    load_in_4bit: true              # 4-bit 量化
+    load_in_4bit: true # 4-bit 量化
     load_in_8bit: false
-  
+
   attention:
-    implementation: "sdpa"          # SDPA 实现
-  
+    implementation: "sdpa" # SDPA 实现
+
   options:
     use_cache: true
-    trust_remote_code: true         # Qwen 需要 trust_remote_code
+    trust_remote_code: true # Qwen 需要 trust_remote_code
 
 lora:
-  r: 16                             # LoRA 秩
+  r: 16 # LoRA 秩
   alpha: 16
   dropout: 0
   target_modules:
-    - "q_proj"
-    - "k_proj"
-    - "v_proj"
-    - "o_proj"
+    - "q_proj" # Query投影
+    - "k_proj" # Key投影
+    - "v_proj" # Value投影
+    - "o_proj" # Output投影
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
   bias: "none"
   use_rslora: false
 
@@ -75,33 +81,33 @@ training:
   num_epochs: 1
   per_device_batch_size: 8
   gradient_accumulation_steps: 2
-  learning_rate: 2e-5               # Qwen 推荐学习率
+  learning_rate: 2e-5 # Qwen 推荐学习率
   lr_scaling: "sqrt"
   warmup_ratio: 0.1
-  
+
   optimizer:
     type: "adamw_8bit"
     weight_decay: 0.01
     max_grad_norm: 1.0
-  
+
   precision:
     bf16: true
     fp16: false
     tf32: true
-  
+
   vision:
-    enabled: true                   # Qwen3.5-4B-VL 是 Vision 模型
+    enabled: true # Qwen3.5-4B-VL 是 Vision 模型
     image_width: 896
     image_height: 896
     image_load_mode: "lazy"
 
 distributed:
-  mode: "ddp"
+  mode: "DDP"
   num_gpus: 8
-  
+
   ddp:
     backend: "nccl"
-  
+
   fsdp:
     sharding_strategy: "FULL_SHARD"
     auto_wrap_policy: "TRANSFORMER_BASED_WRAP"
@@ -121,7 +127,7 @@ output:
   save_strategy: "steps"
   save_steps: 500
   save_total_limit: 3
-  
+
   logging:
     log_level: "INFO"
     log_steps: 10
@@ -148,7 +154,7 @@ notes:
   coordinate_format_info: |
     Qwen3.5 使用传统 xyxy 格式 [x_min, y_min, x_max, y_max]
     与 Gemma4 的 yxyx 格式不同，转换时请注意。
-  
+
   trust_remote_code_warning: |
     ⚠️ Qwen 模型需要设置 trust_remote_code=True
     请确保模型来源可信。
