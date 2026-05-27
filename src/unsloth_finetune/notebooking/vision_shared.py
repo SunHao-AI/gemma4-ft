@@ -647,15 +647,11 @@ class DetectionVisualizer:
             x1, y1, x2, y2 = bbox[0], bbox[1], bbox[2], bbox[3]
             color = self._get_color(index)
 
-            scale_factor = min(img_width / 500, 2.0)
-            box_width_scaled = max(box_width * scale_factor, 1.0)
-            box_width_scaled = min(box_width_scaled, 4.0)
-
             rect = Rectangle(
                 (x1, y1),
                 x2 - x1,
                 y2 - y1,
-                linewidth=box_width_scaled,
+                linewidth=2,
                 edgecolor=color,
                 facecolor="none",
             )
@@ -679,16 +675,7 @@ class DetectionVisualizer:
                 label_x1 = 0
 
             text_bbox.set_position((label_x1 + 1, label_y1 + 0.5))
-
-            label_bg = Rectangle(
-                (label_x1, label_y1),
-                text_width_data + 2,
-                text_height_data + 1,
-                facecolor=color,
-                edgecolor="none",
-                zorder=text_bbox.get_zorder() - 1,
-            )
-            ax.add_patch(label_bg)
+            text_bbox.set_bbox(dict(facecolor="red", alpha=0.7, edgecolor="none", pad=1))
 
         if title:
             ax.set_title(title)
