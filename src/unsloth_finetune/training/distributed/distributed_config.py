@@ -1,14 +1,14 @@
 """统一分布式训练配置模块
 
 提供灵活的分布式训练参数系统, 支持根据模型规模和硬件资源选择:
-  - DDP数据并行: 小模型, 每卡完整模型, 支持models_per_gpu吞吐量倍增
+  - ddp数据并行: 小模型, 每卡完整模型, 支持models_per_gpu吞吐量倍增
   - device_map模型并行: 大模型, 模型参数在GPU间均衡分配, 支持GPU分组2D并行
-  - FSDP分片并行: 大模型, 参数/梯度/优化器全分片
+  - fsdp分片并行: 大模型, 参数/梯度/优化器全分片
 
 设计参考:
   - Unsloth框架的FastVisionModel.from_pretrained() device_map机制
   - HuggingFace Accelerate的dispatch_model/infer_auto_device_map
-  - PyTorch DDP/FSDP标准分布式模式
+  - PyTorch ddp/fsdp标准分布式模式
   - DeepSpeed ZeRO分片策略
 
 核心概念:
@@ -32,9 +32,9 @@ logger = logging.getLogger(__name__)
 
 
 class DistributedMode(Enum):
-    DDP = "DDP"
+    ddp = "ddp"
     DEVICE_MAP = "device_map"
-    FSDP = "FSDP"
+    fsdp = "fsdp"
     SINGLE_GPU = "single_gpu"
 
 
@@ -55,7 +55,7 @@ class DeviceMapStrategy(Enum):
 class DistributedConfig:
     """统一分布式训练配置
 
-    通过简单参数切换DDP/device_map/FSDP模式, 自动计算:
+    通过简单参数切换ddp/device_map/fsdp模式, 自动计算:
       - 有效批次大小
       - 学习率缩放
       - device_map映射
@@ -63,7 +63,7 @@ class DistributedConfig:
       - torchrun启动命令
 
     使用示例:
-      # 1. 小模型DDP: 8卡, 每卡2倍吞吐
+      # 1. 小模型ddp: 8卡, 每卡2倍吞吐
       config = DistributedConfig(
           mode="ddp",
           gpu_ids=[0,1,2,3,4,5,6,7],
@@ -81,7 +81,7 @@ class DistributedConfig:
           learning_rate=4e-5,
       )
 
-      # 3. 大模型FSDP: 8卡全分片
+      # 3. 大模型fsdp: 8卡全分片
       config = DistributedConfig(
           mode="fsdp",
           gpu_ids=[0,1,2,3,4,5,6,7],
@@ -160,22 +160,16 @@ class DistributedConfig:
     def _validate(self):
         mode_values = [m.value for m in DistributedMode]
         if self.mode not in mode_values:
-            raise ValueError(
-                f"mode必须是{mode_values}之一, 当前: {self.mode}"
-            )
+            raise ValueError(f"mode必须是{mode_values}之一, 当前: {self.mode}")
 
         if self.models_per_gpu < 1:
-            raise ValueError(
-                f"models_per_gpu必须>=1, 当前: {self.models_per_gpu}"
-            )
+            raise ValueError(f"models_per_gpu必须>=1, 当前: {self.models_per_gpu}")
 
         if self.gpu_ids is not None:
             available = torch.cuda.device_count()
             for gid in self.gpu_ids:
                 if gid < 0 or gid >= available:
-                    raise ValueError(
-                        f"gpu_ids中{gid}超出范围(0-{available-1}), 可用GPU数: {available}"
-                    )
+                    raise ValueError(f"gpu_ids中{gid}超出范围(0-{available-1}), 可用GPU数: {available}")
 
         if self.gpu_groups is not None:
             all_gpus = []
@@ -184,9 +178,7 @@ class DistributedConfig:
                     raise ValueError("GPU分组不能为空")
                 all_gpus.extend(group)
             if len(all_gpus) != len(set(all_gpus)):
-                raise ValueError(
-                    "GPU分组中存在重复GPU, 每个GPU只能属于一个分组"
-                )
+                raise ValueError("GPU分组中存在重复GPU, 每个GPU只能属于一个分组")
 
             cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
             is_gpu_group_isolated = cuda_visible != "" and "," in cuda_visible and len(cuda_visible.split(",")) < len(all_gpus)
@@ -195,54 +187,37 @@ class DistributedConfig:
                 available = torch.cuda.device_count()
                 for gid in all_gpus:
                     if gid < 0 or gid >= available:
-                        raise ValueError(
-                            f"gpu_groups中{gid}超出范围(0-{available-1}), 可用GPU数: {available}"
-                        )
+                        raise ValueError(f"gpu_groups中{gid}超出范围(0-{available-1}), 可用GPU数: {available}")
             else:
                 max_gpu = max(all_gpus) if all_gpus else 0
                 logger.debug(f"GPU组隔离模式: CUDA_VISIBLE_DEVICES={cuda_visible}, 物理GPU编号范围检查已跳过 (物理编号最大值={max_gpu})")
 
         if self.mode == "ddp" and self.device_map_strategy is not None:
-            raise ValueError(
-                "DDP模式与device_map互斥: DDP每进程加载完整模型, device_map会触发模型并行导致冲突"
-                "如需模型并行请使用mode='device_map'"
-            )
+            raise ValueError("ddp模式与device_map互斥: ddp每进程加载完整模型, device_map会触发模型并行导致冲突" "如需模型并行请使用mode='device_map'")
 
         if self.mode == "device_map" and self.device_map_strategy is None and self.custom_device_map is None:
             if self.gpu_groups is None:
-                raise ValueError(
-                    "device_map模式需要指定device_map_strategy或custom_device_map"
-                )
+                raise ValueError("device_map模式需要指定device_map_strategy或custom_device_map")
 
         if self.mode == "fsdp" and self.device_map_strategy is not None:
-            raise ValueError(
-                "FSDP模式与device_map互斥: FSDP通过分片实现模型并行, 不需要device_map"
-            )
+            raise ValueError("fsdp模式与device_map互斥: fsdp通过分片实现模型并行, 不需要device_map")
 
         if self.gpu_ids is not None and self.gpu_groups is not None:
             overlap = set(self.gpu_ids) & set(g for g in self.gpu_groups for g in g)
             if overlap:
-                raise ValueError(
-                    f"gpu_ids和gpu_groups存在重叠GPU: {overlap}"
-                )
+                raise ValueError(f"gpu_ids和gpu_groups存在重叠GPU: {overlap}")
 
         if self.models_per_gpu > 1 and self.mode == "device_map":
-            logger.warning(
-                "device_map模式下models_per_gpu>1无实际意义(模型已分片到多卡), 已自动设为1"
-            )
+            logger.warning("device_map模式下models_per_gpu>1无实际意义(模型已分片到多卡), 已自动设为1")
             self.models_per_gpu = 1
 
         lr_values = [s.value for s in LRScalingStrategy]
         if self.lr_scaling not in lr_values:
-            raise ValueError(
-                f"lr_scaling必须是{lr_values}之一, 当前: {self.lr_scaling}"
-            )
+            raise ValueError(f"lr_scaling必须是{lr_values}之一, 当前: {self.lr_scaling}")
 
         valid_image_load_modes = {"preload", "lazy", "batch"}
         if self.image_load_mode not in valid_image_load_modes:
-            raise ValueError(
-                f"image_load_mode必须是{valid_image_load_modes}之一, 当前: {self.image_load_mode}"
-            )
+            raise ValueError(f"image_load_mode必须是{valid_image_load_modes}之一, 当前: {self.image_load_mode}")
 
         if self.dataloader_num_workers is not None and self.dataloader_num_workers < 0:
             raise ValueError("dataloader_num_workers必须>=0")
@@ -256,29 +231,20 @@ class DistributedConfig:
         if self.attn_implementation is not None:
             valid_attn = {"sdpa", "flash_attention_2", "eager"}
             if self.attn_implementation not in valid_attn:
-                raise ValueError(
-                    f"attn_implementation必须是{valid_attn}之一, 当前: {self.attn_implementation}"
-                )
+                raise ValueError(f"attn_implementation必须是{valid_attn}之一, 当前: {self.attn_implementation}")
 
     def _resolve_mode(self):
         is_distributed_env = os.environ.get("LOCAL_RANK") is not None
 
         if self.mode == "single_gpu" and is_distributed_env:
-            logger.warning(
-                "检测到分布式环境(LOCAL_RANK已设置), 但配置为single_gpu模式, 请确认是否正确"
-            )
+            logger.warning("检测到分布式环境(LOCAL_RANK已设置), 但配置为single_gpu模式, 请确认是否正确")
 
         if self.mode == "ddp" and not is_distributed_env and self.gpu_ids is not None and len(self.gpu_ids) > 1:
-            logger.info(
-                "DDP模式需要torchrun多进程启动, 当前为单进程环境(Notebook)"
-                "实际将退化为单GPU模式, 请使用torchrun启动train_distributed.py"
-            )
+            logger.info("ddp模式需要torchrun多进程启动, 当前为单进程环境(Notebook)" "实际将退化为单GPU模式, 请使用torchrun启动train_distributed.py")
 
         if self.gpu_groups is not None and self.mode not in ("device_map", "single_gpu"):
             if self.mode == "ddp":
-                logger.warning(
-                    "DDP模式不支持gpu_groups(DDP每卡独立完整模型), 已切换为device_map模式"
-                )
+                logger.warning("ddp模式不支持gpu_groups(ddp每卡独立完整模型), 已切换为device_map模式")
                 self.mode = "device_map"
 
         if self.mode == "device_map" and self.gpu_groups is not None:
@@ -704,7 +670,7 @@ class DistributedConfig:
             lines.append(f"  可用GPU: {n}")
 
         device_map = self.get_device_map(self.local_rank)
-        dm_desc = str(device_map) if device_map is not None else "None (DDP每进程独立GPU)"
+        dm_desc = str(device_map) if device_map is not None else "None (ddp每进程独立GPU)"
         lines.append(f"  device_map: {dm_desc}")
 
         lines.append("")
@@ -785,7 +751,7 @@ def create_ddp_config(
     lr_scaling: str = "linear",
     **kwargs,
 ) -> DistributedConfig:
-    """便捷函数: 创建DDP数据并行配置
+    """便捷函数: 创建ddp数据并行配置
 
     适用于小模型(单卡可容纳完整模型), 通过models_per_gpu倍增吞吐量.
 
@@ -867,7 +833,7 @@ def create_fsdp_config(
     fsdp_config: Optional[Dict[str, Any]] = None,
     **kwargs,
 ) -> DistributedConfig:
-    """便捷函数: 创建FSDP分片并行配置
+    """便捷函数: 创建fsdp分片并行配置
 
     适用于大模型(31B+), 参数/梯度/优化器全分片.
 
@@ -877,7 +843,7 @@ def create_fsdp_config(
         gradient_accumulation_steps: 梯度累积步数
         learning_rate: 基础学习率
         lr_scaling: 学习率缩放策略
-        fsdp_config: FSDP配置字典
+        fsdp_config: fsdp配置字典
 
     Returns:
         DistributedConfig实例
@@ -903,10 +869,10 @@ def auto_detect_config(
 ) -> DistributedConfig:
     """自动检测并创建最优分布式配置
 
-    根据模型显存需求和可用GPU资源, 自动选择DDP/device_map/FSDP模式:
-      - 模型可放入单卡 → DDP (最低通信开销)
+    根据模型显存需求和可用GPU资源, 自动选择ddp/device_map/fsdp模式:
+      - 模型可放入单卡 → ddp (最低通信开销)
       - 模型需N卡容纳 → device_map with gpu_groups (N卡/组, 余下GPU做数据并行)
-      - 模型极大, 需全部GPU分片 → FSDP
+      - 模型极大, 需全部GPU分片 → fsdp
 
     Args:
         model_vram_gb: 模型所需显存(GB), None则默认小模型(10GB)
@@ -924,20 +890,14 @@ def auto_detect_config(
     if n_gpus == 0:
         raise RuntimeError("未检测到GPU, 无法配置分布式训练")
 
-    gpu_vrams = [
-        torch.cuda.get_device_properties(i).total_memory / 1024**3
-        for i in range(n_gpus)
-    ]
+    gpu_vrams = [torch.cuda.get_device_properties(i).total_memory / 1024**3 for i in range(n_gpus)]
     min_gpu_vram = min(gpu_vrams)
     usable_vram = min_gpu_vram * 0.80
 
     if model_vram_gb <= usable_vram:
         models_fit = int(usable_vram / model_vram_gb)
         models_per_gpu = min(models_fit, 2)
-        logger.info(
-            f"模型{model_vram_gb:.1f}GB可放入单卡(可用{usable_vram:.1f}GB), "
-            f"选择DDP模式, models_per_gpu={models_per_gpu}"
-        )
+        logger.info(f"模型{model_vram_gb:.1f}GB可放入单卡(可用{usable_vram:.1f}GB), " f"选择ddp模式, models_per_gpu={models_per_gpu}")
         return create_ddp_config(
             models_per_gpu=models_per_gpu,
             per_device_batch_size=per_device_batch_size,
@@ -948,9 +908,7 @@ def auto_detect_config(
 
     gpus_needed = int(model_vram_gb / usable_vram) + 1
     if gpus_needed > n_gpus:
-        logger.info(
-            f"模型{model_vram_gb:.1f}GB需{gpus_needed}卡但仅{n_gpus}卡可用, 选择FSDP全分片"
-        )
+        logger.info(f"模型{model_vram_gb:.1f}GB需{gpus_needed}卡但仅{n_gpus}卡可用, 选择fsdp全分片")
         return create_fsdp_config(
             per_device_batch_size=max(1, per_device_batch_size // 2),
             gradient_accumulation_steps=gradient_accumulation_steps * 2,
@@ -961,9 +919,7 @@ def auto_detect_config(
     num_groups = n_gpus // gpus_needed
     remainder = n_gpus % gpus_needed
     if remainder != 0:
-        logger.warning(
-            f"{n_gpus}卡不能被{gpus_needed}均匀分组, {remainder}卡将闲置"
-        )
+        logger.warning(f"{n_gpus}卡不能被{gpus_needed}均匀分组, {remainder}卡将闲置")
 
     groups = []
     for i in range(num_groups):
@@ -971,10 +927,7 @@ def auto_detect_config(
         group = list(range(start, start + gpus_needed))
         groups.append(group)
 
-    logger.info(
-        f"模型{model_vram_gb:.1f}GB需{gpus_needed}卡/组, "
-        f"{n_gpus}卡分{num_groups}组, device_map+DDP 2D并行"
-    )
+    logger.info(f"模型{model_vram_gb:.1f}GB需{gpus_needed}卡/组, " f"{n_gpus}卡分{num_groups}组, device_map+ddp 2D并行")
     return create_device_map_config(
         gpu_groups=groups,
         device_map_strategy="balanced",

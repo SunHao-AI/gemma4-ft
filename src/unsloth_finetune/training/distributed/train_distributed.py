@@ -904,7 +904,7 @@ def main():
     if is_main_process():
         logger.info(f"预热: {config.warmup_ratio} ratio -> {warmup_steps} steps")
 
-    if config.mode == DistributedMode.FSDP.value:
+    if config.mode == DistributedMode.fsdp.value:
         fsdp_cfg = config._load_fsdp_config()
         training_kwargs["fsdp_config"] = fsdp_cfg
 
