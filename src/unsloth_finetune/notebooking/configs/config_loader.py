@@ -187,9 +187,9 @@ VALID_IMAGE_LOAD_MODES: Set[str] = {"lazy", "preload"}
 
 DISTRIBUTED_MODE_DIR_MAP: Dict[str, str] = {
     "single": "single_gpu",
-    "ddp": "ddp_8gpu",
-    "fsdp": "fsdp_8gpu",
-    "device_map": "devicemap_4group",
+    "ddp": "ddp_gpu",
+    "fsdp": "fsdp_gpu",
+    "device_map": "devicemap_group",
     "auto": "auto_detect",
     "multi_node": "multi_node",
     "compare": "compare",
