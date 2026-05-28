@@ -6,9 +6,9 @@ from typing import Iterable, Optional
 
 MODE_DIR_MAP = {
     "single": "single",
-    "DDP": "ddp_8gpu",
+    "ddp": "ddp_8gpu",
     "device_map": "devicemap_4group",
-    "FSDP": "fsdp_8gpu",
+    "fsdp": "fsdp_8gpu",
     "auto": "auto_detect",
     "multi_node": "multi_node",
     "compare": "compare",
@@ -81,6 +81,6 @@ def resolve_eval_gpu_ids(
         return sorted(dict.fromkeys(flat))
 
     visible = list(range(gpu_count))
-    if training_mode in {"DDP", "device_map", "FSDP", "auto", "multi_node"} and gpu_count > 1:
+    if training_mode in {"ddp", "device_map", "fsdp", "auto", "multi_node"} and gpu_count > 1:
         return visible
     return [visible[0]]
