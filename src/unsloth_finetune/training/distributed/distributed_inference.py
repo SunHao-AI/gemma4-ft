@@ -1141,10 +1141,12 @@ def run_model_round(
     coord_format: str = "xyxy",
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     worker_start = time.time()
+    barrier()
     load_start = time.time()
     log(f"{model_type} start loading model", rank=rank)
     loader = ModelLoader(build_model_config(args, model_type, local_rank, physical_gpu))
     success = loader.load_model()
+    barrier()
     if success:
         log(f"{model_type} model loaded", rank=rank)
     load_seconds = time.time() - load_start
@@ -1500,8 +1502,10 @@ def run_model_round_dynamic(
             progress_bar.close()
 
     inference_seconds = time.time() - infer_start
+    barrier()
     gpu_metrics = collect_local_gpu_metrics(local_rank, physical_gpu)
     loader.unload_model()
+    barrier()
     total_seconds = time.time() - worker_start
     task_queue.update_worker_status(
         worker_rank=rank,
