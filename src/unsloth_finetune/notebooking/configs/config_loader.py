@@ -185,6 +185,16 @@ VALID_DISTRIBUTED_MODES: Set[str] = {"single", "ddp", "fsdp", "device_map", "aut
 VALID_LR_SCALINGS: Set[str] = {"none", "linear", "sqrt"}
 VALID_IMAGE_LOAD_MODES: Set[str] = {"lazy", "preload"}
 
+DISTRIBUTED_MODE_DIR_MAP: Dict[str, str] = {
+    "single": "single",
+    "ddp": "ddp_8gpu",
+    "fsdp": "fsdp_8gpu",
+    "device_map": "devicemap_4group",
+    "auto": "auto_detect",
+    "multi_node": "multi_node",
+    "compare": "compare",
+}
+
 GEMMA4_REQUIRED_CONFIG: Dict[str, Any] = {
     "coord_norm": "norm_1000",
     "coord_format": "yxyx",
@@ -853,6 +863,8 @@ def get_lora_adapter_path(
             distributed_mode = "single_gpu"
         else:
             distributed_mode = dist_cfg.mode
+
+    distributed_mode = DISTRIBUTED_MODE_DIR_MAP.get(distributed_mode, distributed_mode)
 
     if timestamp is None:
         timestamp = config.output.lora_adapter_timestamp
