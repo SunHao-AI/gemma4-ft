@@ -217,9 +217,7 @@ class DatasetLoader:
 
         # Try box_2d_json format first
         if output_format == "box_2d_json" or assistant_text.strip().startswith("["):
-            json_detections = parse_box_2d_json_ground_truth(
-                assistant_text, img_width, img_height
-            )
+            json_detections = parse_box_2d_json_ground_truth(assistant_text, img_width, img_height)
             if json_detections:
                 return json_detections
 
@@ -445,10 +443,7 @@ def compute_diff_table(all_metrics: Dict[str, Dict[str, Dict[str, Any]]]) -> str
             "iou": finetuned.get("mean_mean_match_iou", 0) - base.get("mean_mean_match_iou", 0),
             "success": finetuned.get("success_rate", 0) - base.get("success_rate", 0),
         }
-        line = (
-            f"{split_name:<8} | {diffs['precision']:>+8.3f}  | {diffs['recall']:>+8.3f}  | "
-            f"{diffs['f1']:>+8.3f}  | {diffs['iou']:>+8.3f}  | {diffs['success']:>+8.3f}"
-        )
+        line = f"{split_name:<8} | {diffs['precision']:>+8.3f}  | {diffs['recall']:>+8.3f}  | " f"{diffs['f1']:>+8.3f}  | {diffs['iou']:>+8.3f}  | {diffs['success']:>+8.3f}"
         lines.append(line)
 
     lines.append(sep)
@@ -634,10 +629,7 @@ def load_multi_gpu_evaluation_outputs(
     leftover_ft = sum(len(items) for items in ft_buckets.values())
     leftover_base = sum(len(items) for items in base_buckets.values())
     if missing_pairs or leftover_ft or leftover_base:
-        print(
-            "警告: 多GPU结果与数据集对齐存在差异, "
-            f"missing_pairs={missing_pairs}, leftover_ft={leftover_ft}, leftover_base={leftover_base}"
-        )
+        print("警告: 多GPU结果与数据集对齐存在差异, " f"missing_pairs={missing_pairs}, leftover_ft={leftover_ft}, leftover_base={leftover_base}")
 
     base_metric_list = [item["base_metrics"] for item in combined_results]
     ft_metric_list = [item["ft_metrics"] for item in combined_results]
@@ -804,10 +796,7 @@ class MetricsVisualizer:
             for column_index in range(len(metric_keys)):
                 value = diff_matrix[row_index, column_index]
                 color = "white" if abs(value) > 0.15 else "black"
-                axis.text(
-                    column_index, row_index, f"{value:+.3f}", ha="center", va="center", fontsize=9, color=color,
-                    fontname=font_props["fontname"]
-                )
+                axis.text(column_index, row_index, f"{value:+.3f}", ha="center", va="center", fontsize=9, color=color, fontname=font_props["fontname"])
 
         axis.set_title(title, fontsize=13, fontweight="bold", fontname=font_props["fontname"])
         cbar = figure.colorbar(image, ax=axis, shrink=0.8)
@@ -828,16 +817,8 @@ class MetricsVisualizer:
 
         for split_name in splits:
             split_results = all_results[split_name]
-            base_ious = [
-                result["base_metrics"]["mean_match_iou"]
-                for result in split_results
-                if result["base_metrics"]["mean_match_iou"] > 0
-            ]
-            ft_ious = [
-                result["ft_metrics"]["mean_match_iou"]
-                for result in split_results
-                if result["ft_metrics"]["mean_match_iou"] > 0
-            ]
+            base_ious = [result["base_metrics"]["mean_match_iou"] for result in split_results if result["base_metrics"]["mean_match_iou"] > 0]
+            ft_ious = [result["ft_metrics"]["mean_match_iou"] for result in split_results if result["ft_metrics"]["mean_match_iou"] > 0]
 
             data_for_box.append(base_ious if base_ious else [0])
             labels_for_box.append(f"{split_name}-原始")
@@ -890,13 +871,15 @@ class SequentialEvaluator:
             image = DatasetLoader.load_image(image_path)
             if image is None:
                 continue
-            prepared.append({
-                "image": image,
-                "image_path": image_path,
-                "query": DatasetLoader.extract_query(record),
-                "ground_truth": DatasetLoader.parse_ground_truth(record),
-                "original_record": record,
-            })
+            prepared.append(
+                {
+                    "image": image,
+                    "image_path": image_path,
+                    "query": DatasetLoader.extract_query(record),
+                    "ground_truth": DatasetLoader.parse_ground_truth(record),
+                    "original_record": record,
+                }
+            )
         return prepared
 
     def _run_batch_inference(
@@ -919,17 +902,17 @@ class SequentialEvaluator:
                     max_new_tokens=self.max_new_tokens,
                 )
                 detections = det_result.get("detections", []) if det_result.get("success") else []
-                metrics = MetricsCalculator.compute_sample_metrics(
-                    detections, record["ground_truth"], self.iou_threshold
+                metrics = MetricsCalculator.compute_sample_metrics(detections, record["ground_truth"], self.iou_threshold)
+                results.append(
+                    {
+                        "index": index,
+                        "image_path": record["image_path"],
+                        "query": record["query"],
+                        "detections": detections,
+                        "ground_truth": record["ground_truth"],
+                        "metrics": metrics,
+                    }
                 )
-                results.append({
-                    "index": index,
-                    "image_path": record["image_path"],
-                    "query": record["query"],
-                    "detections": detections,
-                    "ground_truth": record["ground_truth"],
-                    "metrics": metrics,
-                })
         else:
             for batch_start in range(0, total, self.batch_size):
                 batch_end = min(batch_start + self.batch_size, total)
@@ -941,23 +924,21 @@ class SequentialEvaluator:
                 images = [r["image"] for r in batch_records]
                 queries = [r["query"] for r in batch_records]
 
-                batch_results = detector.detect_batch(
-                    images, queries, max_new_tokens=self.max_new_tokens, batch_size=len(images)
-                )
+                batch_results = detector.detect_batch(images, queries, max_new_tokens=self.max_new_tokens, batch_size=len(images))
 
                 for idx, (record, det_result) in enumerate(zip(batch_records, batch_results)):
                     detections = det_result.get("detections", []) if det_result.get("success") else []
-                    metrics = MetricsCalculator.compute_sample_metrics(
-                        detections, record["ground_truth"], self.iou_threshold
+                    metrics = MetricsCalculator.compute_sample_metrics(detections, record["ground_truth"], self.iou_threshold)
+                    results.append(
+                        {
+                            "index": batch_start + idx,
+                            "image_path": record["image_path"],
+                            "query": record["query"],
+                            "detections": detections,
+                            "ground_truth": record["ground_truth"],
+                            "metrics": metrics,
+                        }
                     )
-                    results.append({
-                        "index": batch_start + idx,
-                        "image_path": record["image_path"],
-                        "query": record["query"],
-                        "detections": detections,
-                        "ground_truth": record["ground_truth"],
-                        "metrics": metrics,
-                    })
 
         return results
 
@@ -988,6 +969,11 @@ class SequentialEvaluator:
             from unsloth_finetune.notebooking.vision_shared import ObjectDetector
 
             own_detector = True
+            if not model_loader.is_loaded():
+                print(f"[{model_key}] 正在加载模型...")
+                load_success = model_loader.load_model()
+                if not load_success:
+                    raise RuntimeError(f"[{model_key}] 模型加载失败，无法进行推理")
             detector = ObjectDetector(
                 model_loader,
                 temperature=temperature,
@@ -1050,18 +1036,20 @@ class SequentialEvaluator:
                 top_p=top_p,
                 max_samples=max_samples,
             )
-            all_results[split_name].extend([
-                {
-                    "index": r["index"],
-                    "split": split_name,
-                    "image_path": r["image_path"],
-                    "query": r["query"],
-                    "ground_truth": r["ground_truth"],
-                    "det_ft": r["detections"],
-                    "ft_metrics": r["metrics"],
-                }
-                for r in ft_results
-            ])
+            all_results[split_name].extend(
+                [
+                    {
+                        "index": r["index"],
+                        "split": split_name,
+                        "image_path": r["image_path"],
+                        "query": r["query"],
+                        "ground_truth": r["ground_truth"],
+                        "det_ft": r["detections"],
+                        "ft_metrics": r["metrics"],
+                    }
+                    for r in ft_results
+                ]
+            )
             all_metrics[split_name]["finetuned"] = ft_agg
             print(f"  微调模型评估完成: F1={ft_agg.get('mean_f1', 0):.3f}")
 
@@ -1084,9 +1072,7 @@ class SequentialEvaluator:
                 if idx < len(all_results[split_name]):
                     all_results[split_name][idx]["det_base"] = r["detections"]
                     all_results[split_name][idx]["base_metrics"] = r["metrics"]
-                    all_results[split_name][idx]["model_iou"] = IOUCalculator.calculate_batch_iou(
-                        r["detections"], all_results[split_name][idx]["det_ft"]
-                    )
+                    all_results[split_name][idx]["model_iou"] = IOUCalculator.calculate_batch_iou(r["detections"], all_results[split_name][idx]["det_ft"])
 
             all_metrics[split_name]["base"] = base_agg
             print(f"  基础模型评估完成: F1={base_agg.get('mean_f1', 0):.3f}")
@@ -1152,18 +1138,20 @@ class BatchEvaluator:
                 ft_metrics = MetricsCalculator.compute_sample_metrics(det_ft, ground_truth, self.iou_threshold)
                 model_iou = IOUCalculator.calculate_batch_iou(det_base, det_ft)
 
-                sample_results.append({
-                    "index": index,
-                    "split": split_name,
-                    "image_path": image_path,
-                    "query": query,
-                    "ground_truth": ground_truth,
-                    "det_base": det_base,
-                    "det_ft": det_ft,
-                    "base_metrics": base_metrics,
-                    "ft_metrics": ft_metrics,
-                    "model_iou": model_iou,
-                })
+                sample_results.append(
+                    {
+                        "index": index,
+                        "split": split_name,
+                        "image_path": image_path,
+                        "query": query,
+                        "ground_truth": ground_truth,
+                        "det_base": det_base,
+                        "det_ft": det_ft,
+                        "base_metrics": base_metrics,
+                        "ft_metrics": ft_metrics,
+                        "model_iou": model_iou,
+                    }
+                )
         else:
             for batch_start in range(0, total, self.batch_size):
                 batch_end = min(batch_start + self.batch_size, total)
@@ -1188,12 +1176,8 @@ class BatchEvaluator:
                 if not images:
                     continue
 
-                base_results = self.detector_base.detect_batch(
-                    images, queries, max_new_tokens=self.max_new_tokens, batch_size=len(images)
-                )
-                ft_results = self.detector_finetuned.detect_batch(
-                    images, queries, max_new_tokens=self.max_new_tokens, batch_size=len(images)
-                )
+                base_results = self.detector_base.detect_batch(images, queries, max_new_tokens=self.max_new_tokens, batch_size=len(images))
+                ft_results = self.detector_finetuned.detect_batch(images, queries, max_new_tokens=self.max_new_tokens, batch_size=len(images))
 
                 for idx, (image, query, base_res, ft_res) in enumerate(zip(images, queries, base_results, ft_results)):
                     record_idx = valid_indices[idx]
@@ -1207,18 +1191,20 @@ class BatchEvaluator:
                     ft_metrics = MetricsCalculator.compute_sample_metrics(det_ft, ground_truth, self.iou_threshold)
                     model_iou = IOUCalculator.calculate_batch_iou(det_base, det_ft)
 
-                    sample_results.append({
-                        "index": record_idx,
-                        "split": split_name,
-                        "image_path": DatasetLoader.extract_image_path(record),
-                        "query": query,
-                        "ground_truth": ground_truth,
-                        "det_base": det_base,
-                        "det_ft": det_ft,
-                        "base_metrics": base_metrics,
-                        "ft_metrics": ft_metrics,
-                        "model_iou": model_iou,
-                    })
+                    sample_results.append(
+                        {
+                            "index": record_idx,
+                            "split": split_name,
+                            "image_path": DatasetLoader.extract_image_path(record),
+                            "query": query,
+                            "ground_truth": ground_truth,
+                            "det_base": det_base,
+                            "det_ft": det_ft,
+                            "base_metrics": base_metrics,
+                            "ft_metrics": ft_metrics,
+                            "model_iou": model_iou,
+                        }
+                    )
 
         base_metric_list = [r["base_metrics"] for r in sample_results]
         ft_metric_list = [r["ft_metrics"] for r in sample_results]

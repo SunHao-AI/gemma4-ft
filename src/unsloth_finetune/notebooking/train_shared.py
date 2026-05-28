@@ -5,7 +5,7 @@ from typing import Iterable, Optional
 
 
 MODE_DIR_MAP = {
-    "single": "single",
+    "single": "single_gpu",
     "ddp": "ddp_8gpu",
     "device_map": "devicemap_4group",
     "fsdp": "fsdp_8gpu",

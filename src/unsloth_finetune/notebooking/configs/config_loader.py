@@ -186,7 +186,7 @@ VALID_LR_SCALINGS: Set[str] = {"none", "linear", "sqrt"}
 VALID_IMAGE_LOAD_MODES: Set[str] = {"lazy", "preload"}
 
 DISTRIBUTED_MODE_DIR_MAP: Dict[str, str] = {
-    "single": "single",
+    "single": "single_gpu",
     "ddp": "ddp_8gpu",
     "fsdp": "fsdp_8gpu",
     "device_map": "devicemap_4group",
@@ -860,7 +860,7 @@ def get_lora_adapter_path(
         if dist_cfg.mode == "ddp":
             distributed_mode = f"ddp_{dist_cfg.num_gpus}gpu"
         elif dist_cfg.mode == "single":
-            distributed_mode = "single_gpu"
+            distributed_mode = "single"
         else:
             distributed_mode = dist_cfg.mode
 
