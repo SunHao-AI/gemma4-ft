@@ -862,3 +862,370 @@ class MetricsVisualizer:
         axis.grid(axis="y", alpha=0.3)
         plt_module.tight_layout()
         plt_module.show()
+
+
+class SequentialEvaluator:
+    def __init__(
+        self,
+        iou_threshold: float = 0.5,
+        batch_size: int = 1,
+        max_new_tokens: int = 512,
+        result_dir: Optional[str] = None,
+        use_cache: bool = True,
+        progress_callback: Optional[callable] = None,
+    ):
+        self.iou_threshold = iou_threshold
+        self.batch_size = batch_size
+        self.max_new_tokens = max_new_tokens
+        self.result_dir = result_dir
+        self.use_cache = use_cache
+        self.progress_callback = progress_callback
+        self.result_manager = ResultManager(result_dir) if result_dir else None
+
+    def _prepare_records(self, records: List[Dict], max_samples: Optional[int] = None) -> List[Dict]:
+        eval_records = records[:max_samples] if max_samples and max_samples < len(records) else records
+        prepared = []
+        for record in eval_records:
+            image_path = DatasetLoader.extract_image_path(record)
+            image = DatasetLoader.load_image(image_path)
+            if image is None:
+                continue
+            prepared.append({
+                "image": image,
+                "image_path": image_path,
+                "query": DatasetLoader.extract_query(record),
+                "ground_truth": DatasetLoader.parse_ground_truth(record),
+                "original_record": record,
+            })
+        return prepared
+
+    def _run_batch_inference(
+        self,
+        detector: "ObjectDetector",
+        records: List[Dict],
+        model_key: str,
+        split_name: str,
+    ) -> List[Dict]:
+        results = []
+        total = len(records)
+
+        if self.batch_size <= 1:
+            for index, record in enumerate(records):
+                if self.progress_callback:
+                    self.progress_callback(index, total, model_key, split_name)
+                det_result = detector.detect(
+                    record["image"],
+                    record["query"],
+                    max_new_tokens=self.max_new_tokens,
+                )
+                detections = det_result.get("detections", []) if det_result.get("success") else []
+                metrics = MetricsCalculator.compute_sample_metrics(
+                    detections, record["ground_truth"], self.iou_threshold
+                )
+                results.append({
+                    "index": index,
+                    "image_path": record["image_path"],
+                    "query": record["query"],
+                    "detections": detections,
+                    "ground_truth": record["ground_truth"],
+                    "metrics": metrics,
+                })
+        else:
+            for batch_start in range(0, total, self.batch_size):
+                batch_end = min(batch_start + self.batch_size, total)
+                batch_records = records[batch_start:batch_end]
+
+                if self.progress_callback:
+                    self.progress_callback(batch_start, total, model_key, split_name, batch_size=len(batch_records))
+
+                images = [r["image"] for r in batch_records]
+                queries = [r["query"] for r in batch_records]
+
+                batch_results = detector.detect_batch(
+                    images, queries, max_new_tokens=self.max_new_tokens, batch_size=len(images)
+                )
+
+                for idx, (record, det_result) in enumerate(zip(batch_records, batch_results)):
+                    detections = det_result.get("detections", []) if det_result.get("success") else []
+                    metrics = MetricsCalculator.compute_sample_metrics(
+                        detections, record["ground_truth"], self.iou_threshold
+                    )
+                    results.append({
+                        "index": batch_start + idx,
+                        "image_path": record["image_path"],
+                        "query": record["query"],
+                        "detections": detections,
+                        "ground_truth": record["ground_truth"],
+                        "metrics": metrics,
+                    })
+
+        return results
+
+    def evaluate_single_model(
+        self,
+        model_loader: "ModelLoader",
+        records: List[Dict],
+        model_key: str,
+        split_name: str,
+        coord_format: str = "xyxy",
+        coord_norm: str = "auto",
+        temperature: float = 0.1,
+        top_p: float = 0.9,
+        max_samples: Optional[int] = None,
+        detector: Optional["ObjectDetector"] = None,
+    ) -> Tuple[List[Dict], Dict[str, Any]]:
+        prepared_records = self._prepare_records(records, max_samples)
+
+        if self.use_cache and self.result_manager:
+            cached_samples = self.result_manager.load_sample_results(model_key, split_name)
+            cached_agg = self.result_manager.load_aggregated_metrics(model_key, split_name)
+            if cached_samples and cached_agg:
+                print(f"[{model_key}/{split_name}] 使用缓存结果 ({len(cached_samples)} 条)")
+                return cached_samples, cached_agg
+
+        own_detector = False
+        if detector is None:
+            from unsloth_finetune.notebooking.vision_shared import ObjectDetector
+
+            own_detector = True
+            detector = ObjectDetector(
+                model_loader,
+                temperature=temperature,
+                top_p=top_p,
+                coord_format=coord_format,
+                coord_norm=coord_norm,
+            )
+
+        results = self._run_batch_inference(detector, prepared_records, model_key, split_name)
+
+        metrics_list = [r["metrics"] for r in results]
+        aggregated = aggregate_metric_dicts(metrics_list)
+
+        if self.use_cache and self.result_manager:
+            self.result_manager.save_sample_results(model_key, split_name, results)
+            self.result_manager.save_aggregated_metrics(model_key, split_name, aggregated)
+
+        if own_detector:
+            pass
+
+        return results, aggregated
+
+    def evaluate_all(
+        self,
+        datasets: Dict[str, List[Dict]],
+        model_loader_finetuned: "ModelLoader",
+        model_loader_base: "ModelLoader",
+        coord_format: str = "xyxy",
+        coord_norm: str = "auto",
+        temperature: float = 0.1,
+        top_p: float = 0.9,
+        max_samples: Optional[int] = None,
+    ) -> Tuple[Dict[str, List[Dict]], Dict[str, Dict[str, Dict[str, Any]]]]:
+        all_results: Dict[str, List[Dict]] = {}
+        all_metrics: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+        print(f"\n{'=' * 60}")
+        print(f"SequentialEvaluator 开始评估 (batch_size={self.batch_size})")
+        print(f"{'=' * 60}\n")
+
+        for split_name, records in datasets.items():
+            if not records:
+                print(f"跳过空数据集: {split_name}")
+                continue
+
+            all_results[split_name] = []
+            all_metrics[split_name] = {}
+
+            print(f"\n[{split_name}] 评估开始 ({len(records)} 条记录)")
+
+            print(f"\n  Phase 1: 加载微调模型进行推理...")
+            ft_results, ft_agg = self.evaluate_single_model(
+                model_loader=model_loader_finetuned,
+                records=records,
+                model_key="finetuned",
+                split_name=split_name,
+                coord_format=coord_format,
+                coord_norm=coord_norm,
+                temperature=temperature,
+                top_p=top_p,
+                max_samples=max_samples,
+            )
+            all_results[split_name].extend([
+                {
+                    "index": r["index"],
+                    "split": split_name,
+                    "image_path": r["image_path"],
+                    "query": r["query"],
+                    "ground_truth": r["ground_truth"],
+                    "det_ft": r["detections"],
+                    "ft_metrics": r["metrics"],
+                }
+                for r in ft_results
+            ])
+            all_metrics[split_name]["finetuned"] = ft_agg
+            print(f"  微调模型评估完成: F1={ft_agg.get('mean_f1', 0):.3f}")
+
+            print(f"\n  Phase 2: 卸载微调模型, 加载基础模型进行推理...")
+            model_loader_finetuned.unload_model()
+
+            base_results, base_agg = self.evaluate_single_model(
+                model_loader=model_loader_base,
+                records=records,
+                model_key="base",
+                split_name=split_name,
+                coord_format=coord_format,
+                coord_norm=coord_norm,
+                temperature=temperature,
+                top_p=top_p,
+                max_samples=max_samples,
+            )
+
+            for idx, r in enumerate(base_results):
+                if idx < len(all_results[split_name]):
+                    all_results[split_name][idx]["det_base"] = r["detections"]
+                    all_results[split_name][idx]["base_metrics"] = r["metrics"]
+                    all_results[split_name][idx]["model_iou"] = IOUCalculator.calculate_batch_iou(
+                        r["detections"], all_results[split_name][idx]["det_ft"]
+                    )
+
+            all_metrics[split_name]["base"] = base_agg
+            print(f"  基础模型评估完成: F1={base_agg.get('mean_f1', 0):.3f}")
+
+            model_loader_base.unload_model()
+            print(f"\n[{split_name}] 评估完成")
+
+        print(f"\n{'=' * 60}")
+        print(f"所有数据集评估完成!")
+        print(f"{'=' * 60}\n")
+
+        return all_results, all_metrics
+
+
+class BatchEvaluator:
+    def __init__(
+        self,
+        detector_base: "ObjectDetector",
+        detector_finetuned: "ObjectDetector",
+        iou_threshold: float = 0.5,
+        batch_size: int = 1,
+        max_new_tokens: int = 512,
+        progress_callback: Optional[callable] = None,
+    ):
+        self.detector_base = detector_base
+        self.detector_finetuned = detector_finetuned
+        self.iou_threshold = iou_threshold
+        self.batch_size = batch_size
+        self.max_new_tokens = max_new_tokens
+        self.progress_callback = progress_callback
+
+    def evaluate_dataset(
+        self,
+        records: List[Dict],
+        split_name: str,
+        max_samples: Optional[int] = None,
+    ) -> Tuple[List[Dict], Dict[str, Any]]:
+        eval_records = records[:max_samples] if max_samples and max_samples < len(records) else records
+
+        sample_results = []
+        total = len(eval_records)
+
+        if self.batch_size <= 1:
+            for index, record in enumerate(eval_records):
+                if self.progress_callback:
+                    self.progress_callback(index, total, split_name)
+
+                image_path = DatasetLoader.extract_image_path(record)
+                image = DatasetLoader.load_image(image_path)
+                if image is None:
+                    continue
+
+                query = DatasetLoader.extract_query(record)
+                ground_truth = DatasetLoader.parse_ground_truth(record)
+
+                det_base_result = self.detector_base.detect(image, query, max_new_tokens=self.max_new_tokens)
+                det_ft_result = self.detector_finetuned.detect(image, query, max_new_tokens=self.max_new_tokens)
+
+                det_base = det_base_result.get("detections", []) if det_base_result.get("success") else []
+                det_ft = det_ft_result.get("detections", []) if det_ft_result.get("success") else []
+
+                base_metrics = MetricsCalculator.compute_sample_metrics(det_base, ground_truth, self.iou_threshold)
+                ft_metrics = MetricsCalculator.compute_sample_metrics(det_ft, ground_truth, self.iou_threshold)
+                model_iou = IOUCalculator.calculate_batch_iou(det_base, det_ft)
+
+                sample_results.append({
+                    "index": index,
+                    "split": split_name,
+                    "image_path": image_path,
+                    "query": query,
+                    "ground_truth": ground_truth,
+                    "det_base": det_base,
+                    "det_ft": det_ft,
+                    "base_metrics": base_metrics,
+                    "ft_metrics": ft_metrics,
+                    "model_iou": model_iou,
+                })
+        else:
+            for batch_start in range(0, total, self.batch_size):
+                batch_end = min(batch_start + self.batch_size, total)
+                batch_records = eval_records[batch_start:batch_end]
+
+                if self.progress_callback:
+                    self.progress_callback(batch_start, total, split_name, batch_size=len(batch_records))
+
+                images = []
+                queries = []
+                valid_indices = []
+
+                for idx, record in enumerate(batch_records):
+                    image_path = DatasetLoader.extract_image_path(record)
+                    image = DatasetLoader.load_image(image_path)
+                    if image is None:
+                        continue
+                    images.append(image)
+                    queries.append(DatasetLoader.extract_query(record))
+                    valid_indices.append(batch_start + idx)
+
+                if not images:
+                    continue
+
+                base_results = self.detector_base.detect_batch(
+                    images, queries, max_new_tokens=self.max_new_tokens, batch_size=len(images)
+                )
+                ft_results = self.detector_finetuned.detect_batch(
+                    images, queries, max_new_tokens=self.max_new_tokens, batch_size=len(images)
+                )
+
+                for idx, (image, query, base_res, ft_res) in enumerate(zip(images, queries, base_results, ft_results)):
+                    record_idx = valid_indices[idx]
+                    record = batch_records[idx]
+
+                    ground_truth = DatasetLoader.parse_ground_truth(record)
+                    det_base = base_res.get("detections", []) if base_res.get("success") else []
+                    det_ft = ft_res.get("detections", []) if ft_res.get("success") else []
+
+                    base_metrics = MetricsCalculator.compute_sample_metrics(det_base, ground_truth, self.iou_threshold)
+                    ft_metrics = MetricsCalculator.compute_sample_metrics(det_ft, ground_truth, self.iou_threshold)
+                    model_iou = IOUCalculator.calculate_batch_iou(det_base, det_ft)
+
+                    sample_results.append({
+                        "index": record_idx,
+                        "split": split_name,
+                        "image_path": DatasetLoader.extract_image_path(record),
+                        "query": query,
+                        "ground_truth": ground_truth,
+                        "det_base": det_base,
+                        "det_ft": det_ft,
+                        "base_metrics": base_metrics,
+                        "ft_metrics": ft_metrics,
+                        "model_iou": model_iou,
+                    })
+
+        base_metric_list = [r["base_metrics"] for r in sample_results]
+        ft_metric_list = [r["ft_metrics"] for r in sample_results]
+
+        aggregated = {
+            "base": aggregate_metric_dicts(base_metric_list),
+            "finetuned": aggregate_metric_dicts(ft_metric_list),
+        }
+
+        return sample_results, aggregated
