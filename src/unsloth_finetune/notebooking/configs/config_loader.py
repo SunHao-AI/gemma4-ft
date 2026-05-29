@@ -857,12 +857,7 @@ def get_lora_adapter_path(
 
     if distributed_mode is None:
         dist_cfg = config.distributed
-        if dist_cfg.mode == "ddp":
-            distributed_mode = f"ddp_{dist_cfg.num_gpus}gpu"
-        elif dist_cfg.mode == "single":
-            distributed_mode = "single"
-        else:
-            distributed_mode = dist_cfg.mode
+        distributed_mode = dist_cfg.mode
 
     distributed_mode = DISTRIBUTED_MODE_DIR_MAP.get(distributed_mode, distributed_mode)
 
