@@ -910,43 +910,71 @@ class LabelMeConverter:
             return record.json_path
         return json.dumps(record.to_dict())
 
+    MIN_SAMPLES_PER_SPLIT = 3
+
     def _split_dataset(
         self,
         records: List[ConversionRecord],
     ) -> Tuple[List[ConversionRecord], List[ConversionRecord], List[ConversionRecord]]:
-        """Split records into train/val/test based on split_method."""
-        # Group by image to prevent leakage
+        """Split records into train/val/test based on split_method.
+
+        改进版分层划分:
+        - 考虑多标签图片的所有类别而非仅主标签
+        - 最小样本保护机制
+        - 划分后分布验证
+        """
         image_groups: Dict[str, List[ConversionRecord]] = {}
-        image_primary_labels: Dict[str, str] = {}
+        image_label_counts: Dict[str, Counter] = {}
 
         for record in records:
             image_key = self._get_record_image_key(record)
             image_groups.setdefault(image_key, []).append(record)
-            # Track primary label for stratified split
-            labels = record.metadata.get("labels", [])
-            if labels and image_key not in image_primary_labels:
-                image_primary_labels[image_key] = labels[0]
+            label_counter = Counter()
+            for label in record.metadata.get("labels", []):
+                label_counter[label] += 1
+            if image_key not in image_label_counts:
+                image_label_counts[image_key] = label_counter
+            else:
+                image_label_counts[image_key].update(label_counter)
 
         group_keys = list(image_groups.keys())
 
         if self.split_method == SplitMethod.SEQUENTIAL:
-            # Sort by filename, then sequential cut
             group_keys.sort()
             grouped = [image_groups[k] for k in group_keys]
+            train_records, val_records, test_records = self._simple_split(grouped)
         elif self.split_method == SplitMethod.STRATIFIED:
-            # Stratified split: group by primary label, apply ratios within each group
-            return self._split_stratified(image_groups, image_primary_labels, group_keys)
+            train_records, val_records, test_records = self._split_stratified_multi_label(
+                image_groups, image_label_counts, group_keys
+            )
         else:
-            # Random split (current default behavior)
             random.shuffle(group_keys)
             grouped = [image_groups[k] for k in group_keys]
+            train_records, val_records, test_records = self._simple_split(grouped)
 
+        self._validate_split_distribution(train_records, val_records, test_records)
+
+        total_images = len(group_keys)
+        train_images = len(set(self._get_record_image_key(r) for r in train_records))
+        val_images = len(set(self._get_record_image_key(r) for r in val_records))
+        test_images = len(set(self._get_record_image_key(r) for r in test_records))
+        self.logger.info(
+            "数据集划分完成: 总图片=%4d, 训练=%4d, 验证=%4d, 测试=%4d, 方法=%s",
+            total_images, train_images, val_images, test_images, self.split_method.value,
+        )
+
+        return train_records, val_records, test_records
+
+    def _simple_split(
+        self,
+        grouped: List[List[ConversionRecord]],
+    ) -> Tuple[List[ConversionRecord], List[ConversionRecord], List[ConversionRecord]]:
+        """Simple sequential/random split by ratio."""
         total_images = len(grouped)
         train_end = int(total_images * self.train_ratio)
         val_end = train_end + int(total_images * self.val_ratio)
 
         if self.test_ratio == 0:
-            # No test split (e.g., 9:1:0)
             train_groups = grouped[:train_end]
             val_groups = grouped[train_end:]
             test_groups = []
@@ -959,46 +987,171 @@ class LabelMeConverter:
         val_records = [r for g in val_groups for r in g]
         test_records = [r for g in test_groups for r in g]
 
-        self.logger.info(
-            "按图片级划分完成: 总图片=%d, 训练=%d, 验证=%d, 测试=%d",
-            total_images, len(train_groups), len(val_groups), len(test_groups),
-        )
-
         return train_records, val_records, test_records
 
-    def _split_stratified(
+    def _split_stratified_multi_label(
         self,
         image_groups: Dict[str, List[ConversionRecord]],
-        image_primary_labels: Dict[str, str],
+        image_label_counts: Dict[str, Counter],
         group_keys: List[str],
     ) -> Tuple[List[ConversionRecord], List[ConversionRecord], List[ConversionRecord]]:
-        """Stratified split ensuring proportional class distribution."""
+        """改进的分层划分：考虑所有标签权重，带最小样本保护。
+
+        算法:
+        1. 计算每个类别总实例数，按稀缺度排序
+        2. 优先处理稀缺类别，确保其分布
+        3. 贪心分配图片，平衡各类别在各split中的比例
+        4. 最小样本保护：样本过少的类别全部入训练集
+        """
         train_records: List[ConversionRecord] = []
         val_records: List[ConversionRecord] = []
         test_records: List[ConversionRecord] = []
 
-        # Group images by primary label
-        label_groups: Dict[str, List[str]] = {}
+        total_label_counts = Counter()
+        for counter in image_label_counts.values():
+            total_label_counts.update(counter)
+
+        scarcity_order = sorted(
+            total_label_counts.keys(),
+            key=lambda x: total_label_counts[x],
+            reverse=False
+        )
+
+        label_to_images: Dict[str, List[str]] = {}
         for key in group_keys:
-            label = image_primary_labels.get(key, "unknown")
-            label_groups.setdefault(label, []).append(key)
+            for label in image_label_counts[key]:
+                label_to_images.setdefault(label, []).append(key)
 
-        for label, keys in label_groups.items():
-            random.shuffle(keys)
-            group_list = [image_groups[k] for k in keys]
-            total = len(group_list)
-            train_end = int(total * self.train_ratio)
-            val_end = train_end + int(total * self.val_ratio)
+        assigned_images: set = set()
+        split_assignments: Dict[str, str] = {}
 
-            if self.test_ratio == 0:
-                train_records.extend(r for g in group_list[:train_end] for r in g)
-                val_records.extend(r for g in group_list[train_end:] for r in g)
-            else:
-                train_records.extend(r for g in group_list[:train_end] for r in g)
-                val_records.extend(r for g in group_list[train_end:val_end] for r in g)
-                test_records.extend(r for g in group_list[val_end:] for r in g)
+        min_required = self.MIN_SAMPLES_PER_SPLIT
+
+        for label in scarcity_order:
+            image_keys = [k for k in label_to_images.get(label, []) if k not in assigned_images]
+            if not image_keys:
+                continue
+
+            random.shuffle(image_keys)
+            total = len(image_keys)
+
+            if total < min_required * 3:
+                self.logger.warning(
+                    f"类别 '{label}' 样本过少({total:3d} 张图片)，全部放入训练集以确保最小样本"
+                )
+                for key in image_keys:
+                    if key not in assigned_images:
+                        split_assignments[key] = "train"
+                        assigned_images.add(key)
+                continue
+
+            train_target = max(min_required, int(total * self.train_ratio))
+            val_target = max(1 if self.val_ratio > 0 else 0, int(total * self.val_ratio))
+            test_target = max(1 if self.test_ratio > 0 else 0, int(total * self.test_ratio))
+
+            train_count = 0
+            val_count = 0
+            test_count = 0
+
+            for key in image_keys:
+                if key in assigned_images:
+                    continue
+
+                if train_count < train_target:
+                    split_assignments[key] = "train"
+                    train_count += 1
+                elif val_count < val_target:
+                    split_assignments[key] = "val"
+                    val_count += 1
+                elif test_count < test_target:
+                    split_assignments[key] = "test"
+                    test_count += 1
+                else:
+                    split_assignments[key] = "train"
+                    train_count += 1
+
+                assigned_images.add(key)
+
+        for key in group_keys:
+            if key not in split_assignments:
+                split_assignments[key] = "train"
+
+        for key, split_name in split_assignments.items():
+            records = image_groups.get(key, [])
+            if split_name == "train":
+                train_records.extend(records)
+            elif split_name == "val":
+                val_records.extend(records)
+            elif split_name == "test":
+                test_records.extend(records)
 
         return train_records, val_records, test_records
+
+    def _validate_split_distribution(
+        self,
+        train_records: List[ConversionRecord],
+        val_records: List[ConversionRecord],
+        test_records: List[ConversionRecord],
+    ) -> None:
+        """验证划分后各类别分布，报告缺失或分布不均问题。"""
+        train_labels = Counter()
+        val_labels = Counter()
+        test_labels = Counter()
+
+        for record in train_records:
+            for label in record.metadata.get("labels", []):
+                train_labels[label] += 1
+        for record in val_records:
+            for label in record.metadata.get("labels", []):
+                val_labels[label] += 1
+        for record in test_records:
+            for label in record.metadata.get("labels", []):
+                test_labels[label] += 1
+
+        all_labels = set(train_labels) | set(val_labels) | set(test_labels)
+        if not all_labels:
+            return
+
+        issues: List[str] = []
+        distribution_summary: Dict[str, Dict[str, int]] = {}
+
+        for label in sorted(all_labels):
+            train_count = train_labels.get(label, 0)
+            val_count = val_labels.get(label, 0)
+            test_count = test_labels.get(label, 0)
+            total = train_count + val_count + test_count
+
+            distribution_summary[label] = {
+                "train": train_count,
+                "val": val_count,
+                "test": test_count,
+                "total": total,
+            }
+
+            if train_count == 0:
+                issues.append(f"训练集缺失类别: {label}")
+            if self.val_ratio > 0 and val_count == 0 and total >= self.MIN_SAMPLES_PER_SPLIT * 3:
+                issues.append(f"验证集缺失类别: {label} (总样本{total})")
+            if self.test_ratio > 0 and test_count == 0 and total >= self.MIN_SAMPLES_PER_SPLIT * 3:
+                issues.append(f"测试集缺失类别: {label} (总样本{total})")
+
+            if total > 0 and train_count > 0:
+                expected_train_ratio = self.train_ratio
+                actual_train_ratio = train_count / total
+                if abs(actual_train_ratio - expected_train_ratio) > 0.15:
+                    issues.append(
+                        f"类别 '{label}' 训练集比例偏差较大: "
+                        f"期望{expected_train_ratio:.1%}, 实际{actual_train_ratio:.1%}"
+                    )
+
+        if issues:
+            self.logger.warning("划分后类别分布问题:\n" + "\n".join(f"  - {issue}" for issue in issues))
+
+        self.logger.info("各类别分布详情:")
+        for label, dist in sorted(distribution_summary.items()):
+            self.logger.info(
+                f"  {label:20s}: train={dist['train']:5d}, val={dist['val']:5d}, test={dist['test']:5d}, total={dist['total']:5d}"
+            )
 
     # -----------------------------------------------------------------------
     # Save & Report

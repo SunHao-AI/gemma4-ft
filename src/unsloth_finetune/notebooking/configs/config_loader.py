@@ -54,7 +54,7 @@ class DataPreparationConfig:
     prompt_lang: str = "zh"
     prompt_style: str = "descriptive"
     split_ratio: str = "8:1:1"
-    split_method: str = "random"
+    split_method: str = "stratified"
     split_seed: Optional[int] = None
     class_whitelist: List[str] = field(default_factory=list)
     class_blacklist: List[str] = field(default_factory=list)
